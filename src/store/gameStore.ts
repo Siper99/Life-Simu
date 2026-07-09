@@ -148,8 +148,12 @@ export const useStore = create<Store>((set, get) => ({
       const { intents } = await parseIntents(settings, game, text);
       const pending = beginTurn(game, text, intents);
       game.pending = pending;
+      // 必须先把 pending 同步进 store：finishTurn 内部用 get() 重新取 game，
+      // 如果这里不 touch，它拿到的还是上一次 set 时的旧引用，pending 为空会静默 return，
+      // 导致 UI 卡在"正在理解你的安排……"不再有任何回应。
+      set({ game: touch(game) });
       if (pending.checks.length > 0) {
-        set({ game: touch(game), phase: "swinging", currentCheckIndex: 0 });
+        set({ phase: "swinging", currentCheckIndex: 0 });
       } else {
         await finishTurn(set, get);
       }
