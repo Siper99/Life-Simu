@@ -86,12 +86,9 @@ export function epitaphPrompt(state: GameState): string {
 【死因】${state.character.deathCause ?? "未知"}`;
 }
 
-/** 无 LLM 时的模板叙事兜底 */
+/** 无 LLM 时的模板叙事兜底：直接展示引擎的机械结果 */
 export function fallbackNarrative(outcome: TurnOutcome): string {
-  const lines: string[] = [];
-  for (const a of outcome.actions) {
-    lines.push(`${a.intent.summary}——${TIER_LABELS[a.tier]}${a.mechanical.split("→")[1]?.split("：")[1] ? `（${a.mechanical.split("：").slice(1).join("：")}）` : ""}`);
-  }
+  const lines: string[] = outcome.actions.map((a) => a.mechanical);
   if (outcome.event) {
     lines.push(`【${outcome.event.skeleton.name}】${outcome.event.skeleton.prompt}——${TIER_LABELS[outcome.event.tier]}`);
   }
