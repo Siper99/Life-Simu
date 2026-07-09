@@ -1,10 +1,17 @@
-// 开局界面：出生卡 + 属性预览 + 天赋三选一 + 重掷。
+// 开局界面：出生卡 + 性别选择 + 属性预览 + 天赋三选一 + 重掷。
 
+import { GenderPref } from "../engine/genesis";
 import { ATTR_LABELS, AttrKey } from "../engine/types";
 import { useStore } from "../store/gameStore";
 
+const GENDER_OPTIONS: { value: GenderPref; label: string }[] = [
+  { value: "random", label: "🎲 随机" },
+  { value: "男", label: "♂ 男" },
+  { value: "女", label: "♀ 女" },
+];
+
 export function Genesis() {
-  const { genesis, rerollGenesis, chooseTalent, setScreen } = useStore();
+  const { genesis, rerollGenesis, chooseTalent, setScreen, genderPref, setGenderPref } = useStore();
   if (!genesis) return null;
   const { state, talentChoices, rerollsLeft } = genesis;
   const c = state.character;
@@ -12,7 +19,22 @@ export function Genesis() {
   return (
     <div className="genesis-screen">
       <h1 className="genesis-title">命运的骰子已掷下</h1>
+      <div className="genesis-gender">
+        <span className="genesis-gender-label">性别</span>
+        {GENDER_OPTIONS.map((o) => (
+          <button
+            key={o.value}
+            className={`btn-ghost gender-btn${genderPref === o.value ? " active" : ""}`}
+            onClick={() => setGenderPref(o.value)}
+          >
+            {o.label}
+          </button>
+        ))}
+      </div>
       <div className="genesis-card">
+        <p className="genesis-name">
+          {c.name}（{c.gender}）
+        </p>
         <p className="genesis-summary">{state.log[0].text}</p>
         <div className="genesis-attrs">
           {(Object.keys(c.attrs) as AttrKey[]).map((k) => (

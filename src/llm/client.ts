@@ -1,4 +1,4 @@
-// 统一聊天客户端：OpenAI 兼容端点 + Anthropic 官方 API。
+// 统一聊天客户端：OpenAI 兼容端点（含 DeepSeek）+ Anthropic 官方 API。
 // 走 Tauri http 插件的 fetch，绕过 webview CORS 限制。
 
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
@@ -54,7 +54,7 @@ export async function chat(
     return text;
   }
 
-  // OpenAI 兼容
+  // OpenAI 兼容（含 DeepSeek：同一协议，走 Bearer 鉴权 + /chat/completions）
   const res = await fetch(`${profile.baseURL.replace(/\/$/, "")}/chat/completions`, {
     method: "POST",
     headers: {

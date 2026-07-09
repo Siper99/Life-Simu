@@ -1,11 +1,13 @@
-// 设置页：LLM profiles 编辑 + 连接测试 + 内容分级 + 叙事风格。
+// 设置页：LLM profiles 编辑 + 连接测试 + 内容分级 + 叙事风格 + 检查更新。
 
 import { useState } from "react";
 import { testProfile } from "../llm/client";
+import { checkForUpdate } from "../updater";
 import {
   AppSettings,
   CONTENT_RATING_LABELS,
   ContentRating,
+  DEEPSEEK_DEFAULTS,
   LlmProfile,
   ProfileRole,
 } from "../llm/types";
@@ -29,10 +31,44 @@ function blankProfile(): LlmProfile {
   };
 }
 
+function deepseekProfile(): LlmProfile {
+  return {
+    id: `p-${Date.now()}`,
+    name: "DeepSeek",
+    kind: "deepseek",
+    baseURL: DEEPSEEK_DEFAULTS.baseURL,
+    apiKey: "",
+    model: DEEPSEEK_DEFAULTS.model,
+    roles: ["narrative"],
+  };
+}
+
+const KIND_PLACEHOLDERS: Record<LlmProfile["kind"], { url: string; model: string }> = {
+  openai: { url: "https://api.openai.com/v1", model: "模型名，如 gpt-4o" },
+  anthropic: { url: "https://api.anthropic.com", model: "模型名，如 claude-sonnet-5" },
+  deepseek: { url: DEEPSEEK_DEFAULTS.baseURL, model: "deepseek-chat 或 deepseek-reasoner" },
+};
+
 export function Settings() {
   const { settings, updateSettings, setScreen, game } = useStore();
   const [draft, setDraft] = useState<AppSettings>(() => JSON.parse(JSON.stringify(settings)));
   const [testResult, setTestResult] = useState<Record<string, string>>({});
+  const [updateMsg, setUpdateMsg] = useState("");
+
+  const runUpdateCheck = async () => {
+    setUpdateMsg("检查中…");
+    try {
+      const update = await checkForUpdate();
+      if (!update) {
+        setUpdateMsg("✅ 已是最新版本");
+        return;
+      }
+      setUpdateMsg(`🔄 发现新版本 v${update.version}，正在下载安装，完成后自动重启…`);
+      await update.install();
+    } catch (e) {
+      setUpdateMsg(`❌ 检查更新失败：${String(e).slice(0, 120)}`);
+    }
+  };
 
   const patchProfile = (id: string, patch: Partial<LlmProfile>) => {
     setDraft({
@@ -84,16 +120,27 @@ export function Settings() {
               <select
                 className="input"
                 value={p.kind}
-                onChange={(e) => patchProfile(p.id, { kind: e.target.value as LlmProfile["kind"] })}
+                onChange={(e) => {
+                  const kind = e.target.value as LlmProfile["kind"];
+                  // 切到 DeepSeek 时自动填官方地址与默认模型（仅当还是别家默认值/空时，不覆盖手改的）
+                  const patch: Partial<LlmProfile> = { kind };
+                  if (kind === "deepseek") {
+                    const untouched = ["", "https://api.openai.com/v1", "https://api.anthropic.com"];
+                    if (untouched.includes(p.baseURL.trim())) patch.baseURL = DEEPSEEK_DEFAULTS.baseURL;
+                    if (!p.model.trim()) patch.model = DEEPSEEK_DEFAULTS.model;
+                  }
+                  patchProfile(p.id, patch);
+                }}
               >
                 <option value="openai">OpenAI 兼容</option>
                 <option value="anthropic">Anthropic</option>
+                <option value="deepseek">DeepSeek</option>
               </select>
               <input
                 className="input profile-url"
                 value={p.baseURL}
                 onChange={(e) => patchProfile(p.id, { baseURL: e.target.value })}
-                placeholder={p.kind === "anthropic" ? "https://api.anthropic.com" : "https://api.openai.com/v1"}
+                placeholder={KIND_PLACEHOLDERS[p.kind].url}
               />
             </div>
             <div className="profile-row">
@@ -109,7 +156,7 @@ export function Settings() {
                 style={{ width: 220 }}
                 value={p.model}
                 onChange={(e) => patchProfile(p.id, { model: e.target.value })}
-                placeholder="模型名，如 claude-sonnet-5"
+                placeholder={KIND_PLACEHOLDERS[p.kind].model}
               />
             </div>
             <div className="profile-row profile-roles">
@@ -137,12 +184,20 @@ export function Settings() {
             {testResult[p.id] && <div className="profile-test">{testResult[p.id]}</div>}
           </div>
         ))}
-        <button
-          className="btn-ghost"
-          onClick={() => setDraft({ ...draft, profiles: [...draft.profiles, blankProfile()] })}
-        >
-          ＋ 添加后端
-        </button>
+        <div className="profile-add-row">
+          <button
+            className="btn-ghost"
+            onClick={() => setDraft({ ...draft, profiles: [...draft.profiles, blankProfile()] })}
+          >
+            ＋ 添加后端
+          </button>
+          <button
+            className="btn-ghost"
+            onClick={() => setDraft({ ...draft, profiles: [...draft.profiles, deepseekProfile()] })}
+          >
+            ＋ 添加 DeepSeek
+          </button>
+        </div>
       </section>
 
       <section className="settings-section">
@@ -174,6 +229,15 @@ export function Settings() {
           onChange={(e) => setDraft({ ...draft, narrativeStyle: e.target.value })}
           placeholder="如：写实细腻，带一点生活的幽默感"
         />
+      </section>
+
+      <section className="settings-section">
+        <h2>版本与更新</h2>
+        <div className="profile-row">
+          <button className="btn-ghost" onClick={() => void runUpdateCheck()}>检查更新</button>
+          {updateMsg && <span className="settings-hint">{updateMsg}</span>}
+        </div>
+        <p className="settings-hint">更新来自 GitHub Release，需要联网。开发模式下不可用。</p>
       </section>
 
       <div className="settings-actions">

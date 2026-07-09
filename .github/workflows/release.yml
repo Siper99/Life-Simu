@@ -1,0 +1,46 @@
+# 发布流水线：推送 v* 标签时自动构建 Windows 安装包并发布到 GitHub Release，
+# 同时生成 updater 所需的 .sig 签名与 latest.json（旧版应用据此自动发现新版）。
+#
+# 需要在仓库 Settings → Secrets and variables → Actions 里配置：
+#   TAURI_SIGNING_PRIVATE_KEY = 本机 ~/.tauri/life-sim.key 的完整内容（私钥，千万别丢）
+
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - run: npm ci
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: "人生模拟器 ${{ github.ref_name }}"
+          releaseBody: "见 Assets：`life-sim_x.y.z_x64-setup.exe` 为安装包；`latest.json` 与 `.sig` 供自动更新使用。"
+          releaseDraft: false
+          prerelease: false

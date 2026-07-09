@@ -1,7 +1,8 @@
 // 全局状态：界面路由、开局流程、回合状态机（idle → parsing → swinging → narrating → idle）。
 
 import { create } from "zustand";
-import { applyTalent, newGameState } from "../engine/genesis";
+import { GenderPref, applyTalent, newGameState, reassignGender } from "../engine/genesis";
+import { Rng } from "../engine/rng";
 import { appendWeeklyNote } from "../engine/memory";
 import { tierFromOffset } from "../engine/resolver";
 import { beginTurn, fastForward, finalizeTurn } from "../engine/turn";
@@ -29,6 +30,7 @@ interface Store {
   phase: TurnPhase;
   currentCheckIndex: number; // pending.checks 中当前待处理的
   lastError: string | null;
+  genderPref: GenderPref; // 开局性别偏好：随机/男/女
 
   init: () => Promise<void>;
   setScreen: (s: Screen) => void;
@@ -37,6 +39,7 @@ interface Store {
 
   startNewGame: () => void;
   rerollGenesis: () => void;
+  setGenderPref: (pref: GenderPref) => void;
   chooseTalent: (t: Talent) => Promise<void>;
   loadSave: (id: string) => Promise<void>;
   deleteSave: (id: string) => Promise<void>;
@@ -60,6 +63,7 @@ export const useStore = create<Store>((set, get) => ({
   phase: "idle",
   currentCheckIndex: 0,
   lastError: null,
+  genderPref: "random",
 
   init: async () => {
     const settings = await persist.loadSettings();
@@ -78,7 +82,7 @@ export const useStore = create<Store>((set, get) => ({
 
   startNewGame: () => {
     const seed = (Date.now() ^ (Math.random() * 0xffffffff)) >>> 0;
-    const { state, talentChoices } = newGameState(seed);
+    const { state, talentChoices } = newGameState(seed, get().genderPref);
     set({ genesis: { state, talentChoices, rerollsLeft: 2 }, screen: "genesis" });
   },
 
@@ -86,8 +90,19 @@ export const useStore = create<Store>((set, get) => ({
     const g = get().genesis;
     if (!g || g.rerollsLeft <= 0) return;
     const seed = (Date.now() ^ (Math.random() * 0xffffffff)) >>> 0;
-    const { state, talentChoices } = newGameState(seed);
+    const { state, talentChoices } = newGameState(seed, get().genderPref);
     set({ genesis: { state, talentChoices, rerollsLeft: g.rerollsLeft - 1 } });
+  },
+
+  setGenderPref: (pref) => {
+    const g = get().genesis;
+    // 选定男/女时当场换性别与名字（不消耗重掷次数）；选随机只影响之后的重掷
+    if (g && pref !== "random") {
+      reassignGender(g.state.character, pref, new Rng(Date.now() >>> 0));
+      set({ genderPref: pref, genesis: { ...g, state: { ...g.state } } });
+    } else {
+      set({ genderPref: pref });
+    }
   },
 
   chooseTalent: async (talent) => {

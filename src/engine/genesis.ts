@@ -120,14 +120,16 @@ export interface GenesisRoll {
   summary: string; // 出生卡文案（无 LLM 时直接展示）
 }
 
-export function rollGenesis(rng: Rng): GenesisRoll {
+export type GenderPref = "random" | "男" | "女";
+
+export function rollGenesis(rng: Rng, genderPref: GenderPref = "random"): GenesisRoll {
   const birthYear = rng.int(1985, 2012);
   const country = rng.weighted(COUNTRIES, (c) => c.weight);
   const city = rng.pick(country.cities);
   const fam = rng.weighted(FAMILY_CLASSES, (f) => f.weight);
   const familyWealth = Math.round(rng.range(fam.wealth[0], fam.wealth[1]));
 
-  const gender = rng.chance(0.512) ? "男" : "女";
+  const gender = genderPref === "random" ? (rng.chance(0.512) ? "男" : "女") : genderPref;
   const surname = rng.pick(SURNAMES);
   const name = `${surname}${gender === "男" ? rng.pick(MALE_NAMES) : rng.pick(FEMALE_NAMES)}`;
 
@@ -198,6 +200,14 @@ export function rollGenesis(rng: Rng): GenesisRoll {
   return { background, character, birthYear, talentChoices, summary };
 }
 
+/** 就地改性别：只换性别与名字（姓氏保留），不影响属性与背景 */
+export function reassignGender(character: CharacterState, gender: "男" | "女", rng: Rng): void {
+  if (character.gender === gender) return;
+  character.gender = gender;
+  const surname = character.name[0]; // SURNAMES 全部为单字姓
+  character.name = `${surname}${gender === "男" ? rng.pick(MALE_NAMES) : rng.pick(FEMALE_NAMES)}`;
+}
+
 export function applyTalent(character: CharacterState, talent: Talent): void {
   character.talents.push(talent);
   for (const [k, v] of Object.entries(talent.attrMods)) {
@@ -206,9 +216,12 @@ export function applyTalent(character: CharacterState, talent: Talent): void {
   }
 }
 
-export function newGameState(seed: number): { state: GameState; talentChoices: Talent[] } {
+export function newGameState(
+  seed: number,
+  genderPref: GenderPref = "random",
+): { state: GameState; talentChoices: Talent[] } {
   const rng = new Rng(seed);
-  const roll = rollGenesis(rng);
+  const roll = rollGenesis(rng, genderPref);
   const state: GameState = {
     id: `save-${Date.now()}`,
     createdAt: Date.now(),

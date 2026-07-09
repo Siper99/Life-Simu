@@ -1,6 +1,7 @@
 // 主菜单：新的人生 / 读档 / 设置。
 
 import { useStore } from "../store/gameStore";
+import { UpdateBanner } from "./UpdateBanner";
 
 export function MainMenu() {
   const { saves, startNewGame, loadSave, deleteSave, setScreen, settings, lastError } = useStore();
@@ -8,6 +9,7 @@ export function MainMenu() {
 
   return (
     <div className="menu-screen">
+      <UpdateBanner />
       <h1 className="menu-title">人生模拟器</h1>
       <p className="menu-tagline">每一次出生都是一次掷骰。这一世，你想怎么活？</p>
 

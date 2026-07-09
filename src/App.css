@@ -157,6 +157,13 @@ button {
 .genesis-title { font-size: 28px; color: var(--accent); letter-spacing: 4px; }
 .genesis-subtitle { font-size: 16px; color: var(--text-dim); font-weight: 500; }
 
+.genesis-gender { display: flex; align-items: center; gap: 10px; }
+.genesis-gender-label { color: var(--text-dim); font-size: 13px; }
+.gender-btn.active {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
 .genesis-card {
   max-width: 640px;
   background: var(--bg-card);
@@ -164,6 +171,7 @@ button {
   border-radius: 12px;
   padding: 22px 28px;
 }
+.genesis-name { color: var(--accent); font-weight: 600; font-size: 16px; margin-bottom: 8px; }
 .genesis-summary { margin-bottom: 16px; }
 
 .genesis-attrs { display: flex; flex-wrap: wrap; gap: 10px 22px; }
@@ -438,6 +446,22 @@ button {
 }
 .profile-row { display: flex; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; align-items: center; }
 .profile-row:last-child { margin-bottom: 0; }
+.profile-add-row { display: flex; gap: 10px; }
+
+/* ---------- 更新横幅 ---------- */
+
+.update-banner {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  background: var(--bg-card);
+  border: 1px solid var(--accent);
+  border-radius: 10px;
+  padding: 10px 18px;
+  margin-bottom: 8px;
+}
+.update-status { color: var(--text-dim); font-size: 13px; }
+.update-error { color: #e05c5c; font-size: 13px; }
 .profile-url { flex: 1; min-width: 200px; }
 .profile-key { flex: 1; min-width: 200px; }
 .profile-roles { font-size: 13px; }
