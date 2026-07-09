@@ -1,6 +1,7 @@
-// 游戏主界面：叙事流 + 文本输入 + 快进 + 摆动条弹层。
+// 游戏主界面：叙事流 + 建议行动 + 文本输入 + 随波逐流 + 摆动条弹层。
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { suggestActions } from "../engine/suggest";
 import { formatDate } from "../engine/types";
 import { actionHint } from "../engine/turn";
 import { useStore } from "../store/gameStore";
@@ -16,6 +17,12 @@ export function GameScreen() {
   useEffect(() => {
     logRef.current?.scrollTo({ top: logRef.current.scrollHeight, behavior: "smooth" });
   }, [game?.log.length, phase]);
+
+  const suggestions = useMemo(
+    () => (game && !game.ended ? suggestActions(game) : []),
+    // 回合数变化时刷新建议
+    [game, game?.turn, game?.ended],
+  );
 
   if (!game) return null;
 
@@ -41,11 +48,21 @@ export function GameScreen() {
           <div className="game-header-actions">
             {!game.ended && (
               <>
-                <button className="btn-ghost" disabled={busy} onClick={() => doFastForward(4)}>
-                  ⏩ 快进4{unitLabel}
+                <button
+                  className="btn-ghost"
+                  disabled={busy}
+                  title="不做任何主动选择，让人生沿着出身的轨迹自己滑行"
+                  onClick={() => doFastForward(4)}
+                >
+                  🌊 随波逐流4{unitLabel}
                 </button>
-                <button className="btn-ghost" disabled={busy} onClick={() => doFastForward(12)}>
-                  ⏩⏩ 快进12{unitLabel}
+                <button
+                  className="btn-ghost"
+                  disabled={busy}
+                  title="不做任何主动选择，让人生沿着出身的轨迹自己滑行"
+                  onClick={() => doFastForward(12)}
+                >
+                  🌊 随波逐流12{unitLabel}
                 </button>
               </>
             )}
@@ -75,6 +92,21 @@ export function GameScreen() {
           </div>
         ) : (
           <div className="game-input-area">
+            {suggestions.length > 0 && (
+              <div className="suggestion-row">
+                <span className="suggestion-label">不知道做什么？试试：</span>
+                {suggestions.map((s) => (
+                  <button
+                    key={s}
+                    className="suggestion-chip"
+                    disabled={busy}
+                    onClick={() => void submitTurn(s)}
+                  >
+                    {s}
+                  </button>
+                ))}
+              </div>
+            )}
             <textarea
               className="game-input"
               placeholder={actionHint(game)}

@@ -19,6 +19,9 @@ export function Genesis() {
   return (
     <div className="genesis-screen">
       <h1 className="genesis-title">命运的骰子已掷下</h1>
+      <p className="genesis-fate">
+        这是你的天命——出身、家庭、时代，无法选择。但从此刻起，每一个选择都属于你。
+      </p>
       <div className="genesis-gender">
         <span className="genesis-gender-label">性别</span>
         {GENDER_OPTIONS.map((o) => (

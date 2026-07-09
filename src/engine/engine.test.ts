@@ -188,3 +188,34 @@ describe("人生阶段与粒度", () => {
     expect(granularityOf(14)).toBe("week");
   });
 });
+
+describe("行动建议", () => {
+  it("每个人生阶段都能给出 1-3 条非空建议，且同回合内稳定", async () => {
+    const { suggestActions } = await import("./suggest");
+    for (let seed = 1; seed <= 20; seed++) {
+      const { state } = newGameState(seed);
+      // 让角色逐步变老，覆盖各人生阶段
+      for (let round = 0; round < 20; round++) {
+        if (state.ended) break;
+        const a = suggestActions(state);
+        expect(a.length).toBeGreaterThanOrEqual(1);
+        expect(a.length).toBeLessThanOrEqual(3);
+        for (const s of a) expect(s.length).toBeGreaterThan(0);
+        expect(new Set(a).size).toBe(a.length); // 无重复
+        expect(suggestActions(state)).toEqual(a); // 同回合稳定
+        fastForward(state, 5);
+      }
+    }
+  });
+
+  it("处境恶化时给出对症建议", async () => {
+    const { suggestActions } = await import("./suggest");
+    const { state } = newGameState(3);
+    fastForward(state, 30); // 成年
+    state.character.attrs.mood = 20;
+    state.character.attrs.health = 30;
+    state.character.money = -500;
+    const a = suggestActions(state);
+    expect(a.some((s) => s.includes("休息") || s.includes("检查") || s.includes("还上"))).toBe(true);
+  });
+});

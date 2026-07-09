@@ -115,6 +115,15 @@ export const useStore = create<Store>((set, get) => ({
       kind: "system",
       text: `天赋觉醒：【${talent.name}】${talent.desc}`,
     });
+    g.state.log.push({
+      turn: 0,
+      date: `${g.state.character.birthYear}年`,
+      kind: "system",
+      text:
+        "【指引】天命已定——出身、家庭、环境都无法重来。往后怎么活，由你决定：" +
+        "在下方输入任何你想做的事（一次可以做几件），或点击建议直接行动；" +
+        "什么都不想管的时候，就点「随波逐流」，让人生沿着出身的轨迹自己滑行。",
+    });
     set({ game: touch(g.state), genesis: null, screen: "game", phase: "idle" });
     await persist.saveGame(g.state);
     await get().refreshSaves();
@@ -192,7 +201,7 @@ export const useStore = create<Store>((set, get) => ({
       turn: game.turn,
       date: formatDate(game),
       kind: "system",
-      text: `时光飞逝……${notes.length > 0 ? notes.slice(-5).join("；") : "平静无事。"}`,
+      text: `你随波逐流，任凭日子推着自己往前走……${notes.length > 0 ? notes.slice(-5).join("；") : "一切平静，什么也没有改变。"}`,
     });
     if (game.ended) {
       await handleDeath(set, get);
