@@ -236,6 +236,7 @@ export interface LogEntry {
   date: string; // "2008年 第14周 (7岁)"
   kind: "narrative" | "system" | "event" | "player";
   text: string;
+  nsfw?: boolean; // 露骨叙事标记：这段正文只在游戏内展示，组装 prompt 时不发给非 nsfw 后端
 }
 
 export interface MemoryNote {

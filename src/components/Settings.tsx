@@ -22,9 +22,14 @@ const ROLE_LABELS: Record<ProfileRole, string> = {
   summary: "摘要压缩",
 };
 
+/** profile id：同一毫秒内连建多个（如一键预设）也不能撞车 */
+function newProfileId(): string {
+  return `p-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+}
+
 function blankProfile(): LlmProfile {
   return {
-    id: `p-${Date.now()}`,
+    id: newProfileId(),
     name: "新配置",
     kind: "openai",
     baseURL: "https://api.openai.com/v1",
@@ -36,7 +41,7 @@ function blankProfile(): LlmProfile {
 
 function deepseekProfile(): LlmProfile {
   return {
-    id: `p-${Date.now()}`,
+    id: newProfileId(),
     name: "DeepSeek",
     kind: "deepseek",
     baseURL: DEEPSEEK_DEFAULTS.baseURL,
@@ -48,7 +53,7 @@ function deepseekProfile(): LlmProfile {
 
 function xaiProfile(): LlmProfile {
   return {
-    id: `p-${Date.now()}`,
+    id: newProfileId(),
     name: "xAI",
     kind: "xai",
     baseURL: XAI_DEFAULTS.baseURL,
@@ -56,6 +61,14 @@ function xaiProfile(): LlmProfile {
     model: XAI_DEFAULTS.model,
     roles: ["narrative"],
   };
+}
+
+/** 一键双后端：常规内容走 DeepSeek，成人内容严格只走 Grok（只填两个 key 即可） */
+function dualBackendPreset(): LlmProfile[] {
+  return [
+    { ...deepseekProfile(), name: "DeepSeek（常规）", roles: ["narrative", "summary"] },
+    { ...xaiProfile(), name: "Grok（成人）", roles: ["nsfw"] },
+  ];
 }
 
 const KIND_PLACEHOLDERS: Record<LlmProfile["kind"], { url: string; model: string }> = {
@@ -120,8 +133,9 @@ export function Settings() {
       <section className="settings-section">
         <h2>大模型配置</h2>
         <p className="settings-hint">
-          可添加多个后端并指派用途。主叙事推荐官方 API；「成人内容」请配置本地模型（如 Ollama：
-          http://localhost:11434/v1）或宽松的兼容端点——露骨内容只会发给标了「成人内容」的后端。
+          可添加多个后端并指派用途。主叙事推荐官方 API；「成人内容」请配置宽松端点（如 Grok）或本地模型
+          （Ollama：http://localhost:11434/v1）。露骨内容只会发给标了「成人内容」的后端，
+          且 NSFW 后端生成的原文不会混进发给常规后端的上下文。同一用途有多个后端时，排在前面的优先。
         </p>
         {draft.profiles.map((p) => (
           <div key={p.id} className="profile-card">
@@ -222,6 +236,13 @@ export function Settings() {
             onClick={() => setDraft({ ...draft, profiles: [...draft.profiles, xaiProfile()] })}
           >
             ＋ 添加 xAI
+          </button>
+          <button
+            className="btn-ghost preset-dual"
+            title="一次建好两个后端：DeepSeek 负责主叙事和摘要，Grok 只负责成人内容——填两个 API Key 即可"
+            onClick={() => setDraft({ ...draft, profiles: [...draft.profiles, ...dualBackendPreset()] })}
+          >
+            ⚡ 一键双后端：DeepSeek 常规 + Grok 成人
           </button>
         </div>
       </section>

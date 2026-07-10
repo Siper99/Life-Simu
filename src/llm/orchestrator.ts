@@ -73,23 +73,28 @@ export async function parseIntents(
   }
 }
 
-/** 叙事生成：NSFW 场景路由到 nsfw profile；顺带产出 0~3 条叙事线头（同一次调用） */
+/**
+ * 叙事生成：NSFW 场景路由到 nsfw profile；顺带产出 0~3 条叙事线头（同一次调用）。
+ * 返回的 nsfw=true 表示正文由 nsfw 后端按露骨分级生成——调用方必须把它隔离在
+ * 游戏内展示层（记忆、线头、后续 prompt 一律用替身文案），防止原文回流官方 API。
+ */
 export async function narrateTurn(
   settings: AppSettings,
   state: GameState,
   playerText: string,
   outcome: TurnOutcome,
-): Promise<{ text: string; hooks: string[]; usedLlm: boolean }> {
+): Promise<{ text: string; hooks: string[]; usedLlm: boolean; nsfw: boolean }> {
   const isNsfwTurn =
     settings.contentRating === "explicit" &&
     outcome.actions.some((a) => a.intent.nsfw);
   const nsfwProfile = profileForRole(settings, "nsfw");
   const profile = isNsfwTurn && nsfwProfile ? nsfwProfile : profileForRole(settings, "narrative");
   if (!profile) {
-    return { text: fallbackNarrative(outcome), hooks: [], usedLlm: false };
+    return { text: fallbackNarrative(outcome), hooks: [], usedLlm: false, nsfw: false };
   }
   // 关键安全约束：露骨内容只发给明确标了 nsfw 角色的后端，绝不发官方 API
   const hasNsfwBackend = Boolean(nsfwProfile) && profile === nsfwProfile;
+  const explicitGenerated = isNsfwTurn && hasNsfwBackend;
   try {
     const raw = await chat(
       profile,
@@ -100,10 +105,10 @@ export async function narrateTurn(
       { temperature: 0.95, maxTokens: 2000 },
     );
     const { text, hooks } = splitNarrativeHooks(raw.trim());
-    return { text: trimToSentenceEnd(text), hooks, usedLlm: true };
+    return { text: trimToSentenceEnd(text), hooks, usedLlm: true, nsfw: explicitGenerated };
   } catch (e) {
     console.warn("叙事生成走兜底：", e);
-    return { text: fallbackNarrative(outcome), hooks: [], usedLlm: false };
+    return { text: fallbackNarrative(outcome), hooks: [], usedLlm: false, nsfw: false };
   }
 }
 

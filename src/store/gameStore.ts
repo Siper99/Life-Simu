@@ -19,6 +19,7 @@ import {
   formatDate,
 } from "../engine/types";
 import { narrateSkip, narrateTurn, parseIntents, proposeChoices, writeEpitaph } from "../llm/orchestrator";
+import { NSFW_MEMORY_PLACEHOLDER } from "../llm/prompts";
 import { AppSettings, DEFAULT_SETTINGS, profileForRole } from "../llm/types";
 import * as persist from "./persist";
 
@@ -429,16 +430,19 @@ async function finishTurn(set: Set, get: Get): Promise<void> {
   const lvBefore = new Map(game.character.skills.map((s) => [s.id, s.level]));
   const outcome = finalizeTurn(game, pending);
   const { chips, attrDeltas } = collectFloatChips(game, outcome, lvBefore);
-  const { text, hooks: newHooks } = await narrateTurn(settings, game, pending.playerText, outcome);
+  const { text, hooks: newHooks, nsfw } = await narrateTurn(settings, game, pending.playerText, outcome);
 
-  game.log.push({ turn: game.turn, date: formatDate(game), kind: "narrative", text });
-  appendWeeklyNote(game, text);
+  // NSFW 隔离：露骨正文只进游戏日志展示；记忆存替身文案、线头不采收，
+  // 保证后续发给常规后端（官方 API）的 prompt 不携带 nsfw 后端生成的原文。
+  game.log.push({ turn: game.turn, date: formatDate(game), kind: "narrative", text, nsfw: nsfw || undefined });
+  appendWeeklyNote(game, nsfw ? NSFW_MEMORY_PLACEHOLDER : text);
 
   // 线头生命周期：叙事已拿到过期线头做最后交代，此后只保留 4 回合内的 + 本回合新增，上限 6 条
   const activeHooks = game.hooks.filter((h) => game.turn - h.turn <= 4);
+  const harvested = nsfw ? [] : newHooks;
   game.hooks = [
     ...activeHooks,
-    ...newHooks.map((t, i) => ({ id: `hook-${game.turn}-${i}`, text: t, turn: game.turn })),
+    ...harvested.map((t, i) => ({ id: `hook-${game.turn}-${i}`, text: t, turn: game.turn })),
   ].slice(-6);
 
   if (outcome.died) {
