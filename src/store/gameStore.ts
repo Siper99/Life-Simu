@@ -5,18 +5,18 @@ import { GenderPref, applyTalent, newGameState, reassignGender } from "../engine
 import { Rng } from "../engine/rng";
 import { appendWeeklyNote } from "../engine/memory";
 import { DecisionBoard, DecisionChoice, getDecisionBoard, selectionError } from "../engine/decisions";
-import { tierFromOffset } from "../engine/resolver";
+import { SWING_EASE_LEVELS, judgeSwing as engineJudgeSwing } from "../engine/resolver";
 import { beginTurn, fastForward, finalizeTurn, TurnOutcome } from "../engine/turn";
 import {
   ATTR_LABELS,
   AttrKey,
   GameState,
+  SwingVerdict,
   Talent,
-  Tier,
   TIER_LABELS,
   formatDate,
 } from "../engine/types";
-import { narrateTurn, parseIntents, proposeChoices, writeEpitaph } from "../llm/orchestrator";
+import { narrateSkip, narrateTurn, parseIntents, proposeChoices, writeEpitaph } from "../llm/orchestrator";
 import { AppSettings, DEFAULT_SETTINGS, profileForRole } from "../llm/types";
 import * as persist from "./persist";
 
@@ -85,8 +85,9 @@ interface Store {
 
   submitTurn: (text: string) => Promise<void>;
   submitChoices: (choiceIds: string[]) => Promise<void>;
-  reportSwing: (offset: number) => Promise<void>;
-  doFastForward: (turns: number) => Promise<void>;
+  judgeSwing: (offset: number) => SwingVerdict | null; // 停针瞬间：判定+豁免掷点，返回最终结论供演出
+  confirmSwing: () => Promise<void>; // 演出结束：推进到下一针或结算回合
+  doFastForward: (turns: number, spanLabel?: string) => Promise<void>;
 }
 
 function touch(game: GameState): GameState {
@@ -199,7 +200,7 @@ export const useStore = create<Store>((set, get) => ({
 
     try {
       const { intents } = await parseIntents(settings, game, text);
-      const pending = beginTurn(game, text, intents);
+      const pending = beginTurn(game, text, intents, SWING_EASE_LEVELS[settings.swingDifficulty]);
       game.pending = pending;
       // 必须先把 pending 同步进 store：finishTurn 内部用 get() 重新取 game，
       // 如果这里不 touch，它拿到的还是上一次 set 时的旧引用，pending 为空会静默 return，
@@ -217,7 +218,7 @@ export const useStore = create<Store>((set, get) => ({
 
 
   submitChoices: async (choiceIds) => {
-    const { game, phase, llmChoices } = get();
+    const { game, phase, llmChoices, settings } = get();
     if (!game || game.ended || phase !== "idle") return;
     // 必须与 UI 使用同一份合并看板，否则选中的 LLM 卡会被误判过期
     const board = mergedBoard(game, llmChoices);
@@ -243,7 +244,7 @@ export const useStore = create<Store>((set, get) => ({
     if (game.decisionHistory.length > 24) game.decisionHistory = game.decisionHistory.slice(-24);
 
     try {
-      const pending = beginTurn(game, text, intents);
+      const pending = beginTurn(game, text, intents, SWING_EASE_LEVELS[settings.swingDifficulty]);
       game.pending = pending;
       set({ game: touch(game) });
       if (pending.checks.length > 0) {
@@ -255,42 +256,55 @@ export const useStore = create<Store>((set, get) => ({
       set({ phase: "idle", lastError: `回合处理失败：${e}` });
     }
   },
-  reportSwing: async (offset) => {
+  judgeSwing: (offset) => {
     const { game, currentCheckIndex } = get();
     const pending = game?.pending;
-    if (!game || !pending) return;
+    if (!game || !pending) return null;
     const check = pending.checks[currentCheckIndex];
-    if (!check) return;
-    const tier: Tier = tierFromOffset(offset, check.zones);
-    pending.checkResults.push({ checkId: check.actionId, tier, offset });
+    if (!check) return null;
+    if (pending.checkResults.some((r) => r.checkId === check.actionId)) return null; // 防重复停针
+    const verdict = engineJudgeSwing(game, check, offset); // 引擎判定 + 豁免掷点（写回 rngState）
+    pending.checkResults.push({ checkId: check.actionId, ...verdict, offset });
     game.log.push({
       turn: game.turn,
       date: formatDate(game),
       kind: "system",
-      text: `⚡ ${check.label} → ${TIER_LABELS[tier]}`,
+      text: verdict.saved
+        ? `⚡ ${check.label} → 大失败…🍀 运气救场，降为失败！`
+        : `⚡ ${check.label} → ${TIER_LABELS[verdict.tier]}`,
     });
+    set({ game: touch(game) });
+    return verdict;
+  },
+
+  confirmSwing: async () => {
+    const { game, currentCheckIndex } = get();
+    const pending = game?.pending;
+    if (!game || !pending) return;
     if (currentCheckIndex + 1 < pending.checks.length) {
-      set({ game: touch(game), currentCheckIndex: currentCheckIndex + 1 });
+      set({ currentCheckIndex: currentCheckIndex + 1 });
     } else {
-      set({ game: touch(game) });
       await finishTurn(set, get);
     }
   },
 
-  doFastForward: async (turns) => {
-    const { game, phase } = get();
+  doFastForward: async (turns, spanLabelIn) => {
+    const { game, phase, settings } = get();
     if (!game || game.ended || phase !== "idle") return;
+    set({ phase: "narrating", lastError: null });
+
+    const unit = game.granularity === "week" ? "周" : game.granularity === "month" ? "个月" : "年";
+    const spanLabel = spanLabelIn ?? (turns === 1 ? `这一${unit}` : `${turns}${unit}`);
     const notes = fastForward(game, turns);
-    game.log.push({
-      turn: game.turn,
-      date: formatDate(game),
-      kind: "system",
-      text: `你随波逐流，任凭日子推着自己往前走……${notes.length > 0 ? notes.slice(-5).join("；") : "一切平静，什么也没有改变。"}`,
-    });
+    // 跳过也有内容：把被动变化（收支/健康/时代事件）写成一段岁月摘要
+    const { text } = await narrateSkip(settings, game, spanLabel, notes);
+    game.log.push({ turn: game.turn, date: formatDate(game), kind: "narrative", text });
+    appendWeeklyNote(game, text);
+
     if (game.ended) {
       await handleDeath(set, get);
     }
-    set({ game: touch(game) });
+    set({ game: touch(game), phase: "idle" });
     refreshLlmChoices(set, get);
     await persist.saveGame(game);
   },
@@ -334,10 +348,17 @@ async function finishTurn(set: Set, get: Get): Promise<void> {
   const lvBefore = new Map(game.character.skills.map((s) => [s.id, s.level]));
   const outcome = finalizeTurn(game, pending);
   const { chips, attrDeltas } = collectFloatChips(game, outcome, lvBefore);
-  const { text } = await narrateTurn(settings, game, pending.playerText, outcome);
+  const { text, hooks: newHooks } = await narrateTurn(settings, game, pending.playerText, outcome);
 
   game.log.push({ turn: game.turn, date: formatDate(game), kind: "narrative", text });
   appendWeeklyNote(game, text);
+
+  // 线头生命周期：叙事已拿到过期线头做最后交代，此后只保留 4 回合内的 + 本回合新增，上限 6 条
+  const activeHooks = game.hooks.filter((h) => game.turn - h.turn <= 4);
+  game.hooks = [
+    ...activeHooks,
+    ...newHooks.map((t, i) => ({ id: `hook-${game.turn}-${i}`, text: t, turn: game.turn })),
+  ].slice(-6);
 
   if (outcome.died) {
     game.ended = true;

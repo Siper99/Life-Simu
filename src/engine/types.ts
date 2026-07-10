@@ -121,6 +121,7 @@ export interface ActionIntent {
   attr: AttrKey; // 主判定属性
   nsfw: boolean;
   target?: string; // 涉及的 NPC 姓名
+  skill?: string; // 这件事在积累的技能名（2~6字名词，如 吉他/木工；缺省由引擎推断）
 }
 
 export type Tier = "crit" | "success" | "partial" | "fail" | "fumble";
@@ -141,6 +142,16 @@ export interface SwingCheck {
   reward: number; // 1..5，决定摆速
   speedHz: number; // 每秒完整往返次数
   zones: ZoneWidths; // 各档位半宽（相对 0.5 中心的距离阈值）
+  baseBest: number; // 属性 50 时的大成功区半宽（双层区宽渲染用）
+  attrName?: string; // 判定属性中文名（加成文案用）
+  attrZonePct: number; // 属性对大成功区宽的影响（%，可为负）
+  attrSpeedPct: number; // 属性对摆速的影响（%，≤0）
+}
+
+/** 转针判定结论：档位 + 是否触发运气豁免（大失败降为失败） */
+export interface SwingVerdict {
+  tier: Tier;
+  saved: boolean;
 }
 
 /** 从中心往外：|pos-0.5| <= best 为大成功，<= success 为成功…… */
@@ -195,7 +206,7 @@ export interface PendingTurn {
   playerText: string;
   intents: ActionIntent[];
   checks: SwingCheck[]; // 待处理（含事件判定，actionId 以 "event:" 前缀区分）
-  checkResults: { checkId: string; tier: Tier; offset: number }[];
+  checkResults: { checkId: string; tier: Tier; offset: number; saved?: boolean }[];
   event: EventSkeleton | null;
 }
 
@@ -209,6 +220,13 @@ export interface LogEntry {
 export interface MemoryNote {
   label: string; // "2008年3月" / "2008年"
   text: string;
+}
+
+/** 叙事线头：LLM 在叙事里埋下的、未来可以回应的伏笔（人物动向/未解冲突/冒头的机会） */
+export interface LifeHook {
+  id: string;
+  text: string; // ≤24 字
+  turn: number; // 埋下时的回合；超过 4 回合未回应视为搁置
 }
 export interface DecisionHistoryEntry {
   turn: number;
@@ -234,6 +252,7 @@ export interface GameState {
   chronicle: string[]; // 人生编年史（每年一段）
   pending: PendingTurn | null;
   decisionHistory: DecisionHistoryEntry[]; // 导演系统只读取最近的结构化选择
+  hooks: LifeHook[]; // 叙事线头（最多 6 条，回响卡与伏笔回收用）
   ended: boolean;
   epitaph?: string;
 }

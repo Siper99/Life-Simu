@@ -10,11 +10,15 @@ import {
   INTENT_SYSTEM,
   SUMMARY_SYSTEM,
   choiceUserPrompt,
+  SKIP_SYSTEM,
   epitaphPrompt,
   fallbackNarrative,
   intentUserPrompt,
   narrativeSystem,
   narrativeUserPrompt,
+  skipUserPrompt,
+  splitNarrativeHooks,
+  trimToSentenceEnd,
 } from "./prompts";
 import { AppSettings, profileForRole } from "./types";
 
@@ -24,7 +28,7 @@ const VALID_RISK = new Set(["none","low","high"]);
 
 interface RawIntent {
   summary?: string; category?: string; hours?: number;
-  risk?: string; attr?: string; nsfw?: boolean; target?: string;
+  risk?: string; attr?: string; nsfw?: boolean; target?: string; skill?: string;
 }
 
 /** 意图解析：LLM 优先，失败/未配置回退关键词解析 */
@@ -60,6 +64,7 @@ export async function parseIntents(
       attr: VALID_ATTRS.has(r.attr ?? "") ? (r.attr as ActionIntent["attr"]) : "mood",
       nsfw: Boolean(r.nsfw),
       target: r.target ? String(r.target).slice(0, 20) : undefined,
+      skill: r.skill ? String(r.skill).trim().slice(0, 6) : undefined,
     }));
     return { intents, usedLlm: true };
   } catch (e) {
@@ -68,36 +73,37 @@ export async function parseIntents(
   }
 }
 
-/** 叙事生成：NSFW 场景路由到 nsfw profile */
+/** 叙事生成：NSFW 场景路由到 nsfw profile；顺带产出 0~3 条叙事线头（同一次调用） */
 export async function narrateTurn(
   settings: AppSettings,
   state: GameState,
   playerText: string,
   outcome: TurnOutcome,
-): Promise<{ text: string; usedLlm: boolean }> {
+): Promise<{ text: string; hooks: string[]; usedLlm: boolean }> {
   const isNsfwTurn =
     settings.contentRating === "explicit" &&
     outcome.actions.some((a) => a.intent.nsfw);
   const nsfwProfile = profileForRole(settings, "nsfw");
   const profile = isNsfwTurn && nsfwProfile ? nsfwProfile : profileForRole(settings, "narrative");
   if (!profile) {
-    return { text: fallbackNarrative(outcome), usedLlm: false };
+    return { text: fallbackNarrative(outcome), hooks: [], usedLlm: false };
   }
   // 关键安全约束：露骨内容只发给明确标了 nsfw 角色的后端，绝不发官方 API
   const hasNsfwBackend = Boolean(nsfwProfile) && profile === nsfwProfile;
   try {
-    const text = await chat(
+    const raw = await chat(
       profile,
       [
         { role: "system", content: narrativeSystem(settings.contentRating, hasNsfwBackend, settings.narrativeStyle) },
         { role: "user", content: narrativeUserPrompt(state, playerText, outcome) },
       ],
-      { temperature: 0.95, maxTokens: 1200 },
+      { temperature: 0.95, maxTokens: 2000 },
     );
-    return { text: text.trim(), usedLlm: true };
+    const { text, hooks } = splitNarrativeHooks(raw.trim());
+    return { text: trimToSentenceEnd(text), hooks, usedLlm: true };
   } catch (e) {
     console.warn("叙事生成走兜底：", e);
-    return { text: fallbackNarrative(outcome), usedLlm: false };
+    return { text: fallbackNarrative(outcome), hooks: [], usedLlm: false };
   }
 }
 
@@ -119,12 +125,40 @@ export async function proposeChoices(
         { role: "system", content: CHOICE_SYSTEM },
         { role: "user", content: choiceUserPrompt(state, board) },
       ],
-      { temperature: 0.9, maxTokens: 800 },
+      { temperature: 0.9, maxTokens: 1200 },
     );
     return sanitizeLlmChoices(state, extractJson(raw));
   } catch (e) {
     console.warn("补充行动卡生成失败，仅用固定卡池：", e);
     return [];
+  }
+}
+
+/** 跳过时间的岁月摘要：把被动变化写成一小段流逝叙事；无 LLM/失败时用模板兜底 */
+export async function narrateSkip(
+  settings: AppSettings,
+  state: GameState,
+  spanLabel: string,
+  notes: string[],
+): Promise<{ text: string; usedLlm: boolean }> {
+  const fallback = `你随波逐流，任凭${spanLabel}推着自己往前走……${
+    notes.length > 0 ? notes.slice(-6).join("；") : "一切平静，什么也没有改变。"
+  }`;
+  const profile = profileForRole(settings, "narrative");
+  if (!profile) return { text: fallback, usedLlm: false };
+  try {
+    const text = await chat(
+      profile,
+      [
+        { role: "system", content: SKIP_SYSTEM },
+        { role: "user", content: skipUserPrompt(state, spanLabel, notes) },
+      ],
+      { temperature: 0.9, maxTokens: 700 },
+    );
+    return { text: trimToSentenceEnd(text.trim()), usedLlm: true };
+  } catch (e) {
+    console.warn("岁月摘要走兜底：", e);
+    return { text: fallback, usedLlm: false };
   }
 }
 
@@ -160,7 +194,7 @@ export async function writeEpitaph(
   try {
     const raw = await chat(profile, [{ role: "user", content: epitaphPrompt(state) }], {
       temperature: 0.9,
-      maxTokens: 400,
+      maxTokens: 600,
     });
     const j = extractJson<{ summary?: string; epitaph?: string }>(raw);
     return {

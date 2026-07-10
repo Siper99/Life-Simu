@@ -1,6 +1,7 @@
 // 开局界面：出生卡 + 性别选择 + 属性预览 + 天赋三选一 + 重掷。
 
 import { GenderPref } from "../engine/genesis";
+import { getTalentRarity } from "../engine/talents";
 import { ATTR_LABELS, AttrKey } from "../engine/types";
 import { useStore } from "../store/gameStore";
 
@@ -52,7 +53,11 @@ export function Genesis() {
       <h2 className="genesis-subtitle">选择一项与生俱来的天赋</h2>
       <div className="genesis-talents">
         {talentChoices.map((t) => (
-          <button key={t.id} className="talent-card" onClick={() => void chooseTalent(t)}>
+          <button
+            key={t.id}
+            className={`talent-card rarity-${getTalentRarity(t)}`}
+            onClick={() => void chooseTalent(t)}
+          >
             <div className="talent-name">✦ {t.name}</div>
             <div className="talent-desc">{t.desc}</div>
           </button>

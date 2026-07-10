@@ -20,6 +20,9 @@ const DIR = { baseDir: BaseDirectory.AppData };
 function migrateGame(state: GameState): GameState {
   state.character.energy ??= 75;
   state.decisionHistory ??= [];
+  state.hooks ??= [];
+  // 旧存档的技能名是行动描述（"扶着家具探索"）：6 字以上判定为旧数据，清除
+  state.character.skills = state.character.skills.filter((s) => s.name.length < 6);
   return state;
 }
 

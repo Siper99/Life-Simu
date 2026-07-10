@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { testProfile } from "../llm/client";
 import { checkForUpdate } from "../updater";
+import { SwingDifficulty } from "../engine/resolver";
 import {
   AppSettings,
   CONTENT_RATING_LABELS,
@@ -10,6 +11,7 @@ import {
   DEEPSEEK_DEFAULTS,
   LlmProfile,
   ProfileRole,
+  SWING_DIFFICULTY_LABELS,
 } from "../llm/types";
 import { useStore } from "../store/gameStore";
 
@@ -217,6 +219,26 @@ export function Settings() {
         </div>
         <p className="settings-hint">
           「露骨」档需要配置了「成人内容」用途的后端才会生效，否则相关场景自动淡化处理。仅限成年虚构角色。
+        </p>
+      </section>
+
+      <section className="settings-section">
+        <h2>判定难度</h2>
+        <div className="rating-options">
+          {(Object.keys(SWING_DIFFICULTY_LABELS) as SwingDifficulty[]).map((d) => (
+            <label key={d} className="role-check" title={SWING_DIFFICULTY_LABELS[d].desc}>
+              <input
+                type="radio"
+                name="swing-difficulty"
+                checked={draft.swingDifficulty === d}
+                onChange={() => setDraft({ ...draft, swingDifficulty: d })}
+              />
+              {SWING_DIFFICULTY_LABELS[d].label}
+            </label>
+          ))}
+        </div>
+        <p className="settings-hint">
+          影响转针的摆速与判定区宽度，保存后对下一次判定立即生效。轻松≈成功率 +8%，硬核≈原版手感。
         </p>
       </section>
 

@@ -1,24 +1,24 @@
 // 回合编排（纯引擎侧，不含 LLM 调用）：开始回合 → 收集摆动条结果 → 终局结算 → 时间推进。
 
 import { Rng } from "./rng";
-import { getWorldPulse } from "./decisions";
+import { epochEventFor, getWorldPulse } from "./decisions";
 import { pickEvent, WEEKLY_EVENT_CHANCE } from "./events";
 import {
+  DEFAULT_SWING_EASE,
   applyDeltas,
   autoTier,
   buildSwingCheck,
-  fumbleSaveChance,
   resolveAction,
   resolveEvent,
 } from "./resolver";
 import {
+  ATTR_LABELS,
   ActionIntent,
   ActionResolution,
   EventResolution,
   GameState,
   PendingTurn,
   SwingCheck,
-  Tier,
   ageOf,
   clamp,
   granularityOf,
@@ -32,7 +32,12 @@ const BASE_DIFFICULTY: Record<string, number> = {
 
 const RISK_REWARD: Record<"none" | "low" | "high", number> = { none: 1, low: 2, high: 4 };
 
-export function beginTurn(state: GameState, playerText: string, intents: ActionIntent[]): PendingTurn {
+export function beginTurn(
+  state: GameState,
+  playerText: string,
+  intents: ActionIntent[],
+  swingEase: number = DEFAULT_SWING_EASE,
+): PendingTurn {
   const rng = Rng.fromState(state.rngState);
   const checks: SwingCheck[] = [];
 
@@ -46,6 +51,8 @@ export function beginTurn(state: GameState, playerText: string, intents: ActionI
           difficulty,
           RISK_REWARD[intent.risk],
           state.character.attrs[intent.attr],
+          ATTR_LABELS[intent.attr],
+          swingEase,
         ),
       );
     }
@@ -63,6 +70,8 @@ export function beginTurn(state: GameState, playerText: string, intents: ActionI
         event.difficulty,
         event.rewardLevel,
         state.character.attrs[event.attr ?? "luck"],
+        ATTR_LABELS[event.attr ?? "luck"],
+        swingEase,
       ),
     );
   }
@@ -81,38 +90,29 @@ export interface TurnOutcome {
 
 export function finalizeTurn(state: GameState, pending: PendingTurn): TurnOutcome {
   const rng = Rng.fromState(state.rngState);
-  const tierOf = (checkId: string): Tier | undefined =>
-    pending.checkResults.find((r) => r.checkId === checkId)?.tier;
-
-  // 转针大失败的运气豁免：降档为普通失败，叙事里体现「有惊无险」
-  const trySave = (tier: Tier | undefined): { tier: Tier | undefined; saved: boolean } => {
-    if (tier === "fumble" && rng.chance(fumbleSaveChance(state.character.attrs.luck))) {
-      return { tier: "fail", saved: true };
-    }
-    return { tier, saved: false };
-  };
+  // 运气豁免已在停针瞬间由 judgeSwing 掷定（checkResults.saved），这里只读结果
+  const resultOf = (checkId: string) => pending.checkResults.find((r) => r.checkId === checkId);
 
   const actions: ActionResolution[] = [];
   for (const intent of pending.intents) {
-    let { tier, saved } = trySave(tierOf(intent.id));
-    if (!tier) {
-      const difficulty = BASE_DIFFICULTY[intent.category] ?? 35;
-      tier = autoTier(rng, difficulty, state.character.attrs[intent.attr]);
-    }
+    const result = resultOf(intent.id);
+    const tier =
+      result?.tier ??
+      autoTier(rng, BASE_DIFFICULTY[intent.category] ?? 35, state.character.attrs[intent.attr]);
     const res = resolveAction(rng, state, intent, tier);
-    if (saved) res.mechanical += "（运气救场：大失败降为失败，有惊无险）";
+    if (result?.saved) res.mechanical += "（运气救场：大失败降为失败，有惊无险）";
     applyDeltas(state, res.deltas);
     actions.push(res);
   }
 
   let event: EventResolution | null = null;
   if (pending.event) {
-    const { tier: savedTier, saved } = trySave(tierOf(`event:${pending.event.id}`));
+    const result = resultOf(`event:${pending.event.id}`);
     const tier =
-      savedTier ??
+      result?.tier ??
       autoTier(rng, pending.event.difficulty, state.character.attrs[pending.event.attr ?? "luck"]);
     event = resolveEvent(rng, state, pending.event, tier);
-    if (saved) event.mechanical += "（运气救场：大失败降为失败，有惊无险）";
+    if (result?.saved) event.mechanical += "（运气救场：大失败降为失败，有惊无险）";
     applyDeltas(state, event.deltas);
   }
 
@@ -137,6 +137,9 @@ function advanceTime(rng: Rng, state: GameState): string[] {
   while (state.world.week > 52) {
     state.world.week -= 52;
     state.world.year += 1;
+    // 跨进大事件之年：写一条被动记录，叙事与日志都会带到
+    const epoch = epochEventFor(state.world.year, state.background.country);
+    if (epoch) notes.push(`【${state.world.year}·${epoch.title}】${epoch.desc}`);
   }
 
   const age = ageOf(state);

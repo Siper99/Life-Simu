@@ -12,6 +12,12 @@
   --accent-dim: #a8873c;
   --danger: #d95b5b;
   --font: "PingFang SC", "Microsoft YaHei", "Noto Sans SC", system-ui, sans-serif;
+
+  /* 天赋品级配色：普通(绿) < 优秀(蓝) < 稀有(紫) < 传说(金) */
+  --rarity-common: #4ade80;
+  --rarity-uncommon: #3b82f6;
+  --rarity-rare: #a855f7;
+  --rarity-legendary: #f2c14e;
 }
 
 * {
@@ -204,6 +210,18 @@ button {
 .talent-name { color: var(--accent); font-weight: 600; margin-bottom: 6px; }
 .talent-desc { font-size: 12.5px; color: var(--text-dim); line-height: 1.6; }
 
+.talent-card.rarity-common { border-color: var(--rarity-common); }
+.talent-card.rarity-common .talent-name { color: var(--rarity-common); }
+.talent-card.rarity-uncommon { border-color: var(--rarity-uncommon); }
+.talent-card.rarity-uncommon .talent-name { color: var(--rarity-uncommon); }
+.talent-card.rarity-rare { border-color: var(--rarity-rare); }
+.talent-card.rarity-rare .talent-name { color: var(--rarity-rare); }
+.talent-card.rarity-legendary {
+  border-color: var(--rarity-legendary);
+  box-shadow: 0 0 14px rgba(242, 193, 78, 0.35);
+}
+.talent-card.rarity-legendary .talent-name { color: var(--rarity-legendary); }
+
 .genesis-actions { display: flex; gap: 12px; }
 
 /* ---------- 游戏主界面 ---------- */
@@ -249,6 +267,10 @@ button {
 .status-kv b { color: var(--text); }
 
 .talent-chip { font-size: 13px; color: var(--accent); margin-bottom: 3px; }
+.talent-chip.rarity-common { color: var(--rarity-common); }
+.talent-chip.rarity-uncommon { color: var(--rarity-uncommon); }
+.talent-chip.rarity-rare { color: var(--rarity-rare); }
+.talent-chip.rarity-legendary { color: var(--rarity-legendary); font-weight: 600; }
 
 .skill-row, .npc-row {
   display: flex;
@@ -447,6 +469,94 @@ button {
 }
 .swing-button:hover { filter: brightness(1.1); }
 
+/* ---------- 转针 2.0：预备/残影/双层区宽/五档演出/运气救场 ---------- */
+
+.swing-attr { font-size: 12px; color: #e9cf8b; margin-top: -4px; }
+.swing-attr-low { color: #c98a8a; }
+
+.swing-pointer-warmup { opacity: 0.35; box-shadow: none; }
+.swing-button-warmup { opacity: 0.55; filter: saturate(0.4); cursor: wait; }
+
+.swing-ghost {
+  position: absolute;
+  top: -3px;
+  bottom: -3px;
+  width: 4px;
+  margin-left: -2px;
+  background: #fff;
+  border-radius: 2px;
+  pointer-events: none;
+}
+.swing-ghost-1 { opacity: 0.3; }
+.swing-ghost-2 { opacity: 0.13; }
+
+.swing-bonus {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: rgba(255, 236, 170, 0.45);
+  pointer-events: none;
+}
+
+.swing-pointer-hit { animation: pointer-flash 0.35s ease-out; }
+@keyframes pointer-flash {
+  0% { box-shadow: 0 0 26px rgba(255, 255, 255, 1), 0 0 50px rgba(255, 255, 255, 0.8); }
+  100% { box-shadow: 0 0 10px rgba(255, 255, 255, 0.9); }
+}
+
+/* 金光横扫：大成功与运气救场共用 */
+.swing-sweep {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 34%;
+  pointer-events: none;
+  background: linear-gradient(to right, transparent, rgba(255, 232, 150, 0.95), transparent);
+  animation: sweep-across 0.7s ease-out;
+  opacity: 0;
+}
+@keyframes sweep-across {
+  0% { left: -34%; opacity: 1; }
+  100% { left: 100%; opacity: 1; }
+}
+
+/* 五档差异化演出（叠加在指针闪光之上） */
+.swing-hit-crit { box-shadow: 0 0 0 1px rgba(245, 197, 66, 0.6), 0 0 60px rgba(245, 197, 66, 0.25); }
+.swing-hit-success .swing-track { animation: track-pulse-good 0.5s ease-out 2; }
+.swing-hit-fail { filter: brightness(0.9); }
+.swing-hit-fail .swing-result { animation: sink-down 0.4s ease-out; }
+.swing-hit-fumble { filter: brightness(0.78); animation: panel-shake 0.22s linear; }
+.swing-hit-save { box-shadow: 0 0 0 1px rgba(245, 197, 66, 0.8), 0 0 70px rgba(245, 197, 66, 0.35); filter: none; }
+
+@keyframes track-pulse-good {
+  0%, 100% { filter: brightness(1); }
+  50% { filter: brightness(1.25); }
+}
+@keyframes sink-down {
+  0% { transform: translateY(-4px); opacity: 0.4; }
+  100% { transform: translateY(0); opacity: 1; }
+}
+@keyframes panel-shake {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-3px); }
+  50% { transform: translateX(3px); }
+  75% { transform: translateX(-2px); }
+}
+
+.swing-result-bounce { animation: result-bounce 0.5s cubic-bezier(0.2, 1.6, 0.4, 1); }
+@keyframes result-bounce {
+  0% { transform: scale(0.4); opacity: 0; }
+  60% { transform: scale(1.35); }
+  100% { transform: scale(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .swing-sweep, .swing-ghost { display: none; }
+  .swing-hit-fumble { animation: none; }
+  .swing-hit-success .swing-track { animation: none; }
+  .swing-result-bounce, .swing-pointer-hit, .swing-result { animation: none; }
+}
+
 /* ---------- 设置 ---------- */
 
 .settings-screen {
@@ -598,6 +708,39 @@ button {
 .choice-expiry { color: #d8b5ef; background: rgba(126, 76, 161, 0.24); }
 .choice-director { color: #efaaa3; background: rgba(160, 63, 53, 0.18); }
 .choice-llm { padding: 1px 7px; border-radius: 999px; font-size: 9.5px; font-weight: 700; color: #ecd193; background: rgba(160, 124, 33, 0.22); }
+
+/* 时代大事件之年：世界横幅高亮 */
+.world-pulse-major { border-color: rgba(232, 184, 75, 0.55); background: linear-gradient(120deg, rgba(148, 112, 28, 0.16), transparent 60%); }
+.world-pulse-major .world-pulse-mark { color: var(--accent); }
+
+/* 跳过时间：拉条选择面板 */
+.skip-wrap { position: relative; }
+.skip-panel {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 30;
+  width: 300px;
+  padding: 14px 16px 12px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.45);
+}
+.skip-range { width: 100%; accent-color: var(--accent); }
+.skip-marks { display: flex; justify-content: space-between; margin: 2px 0 10px; font-size: 10.5px; color: var(--text-dim); }
+.skip-marks .active { color: var(--accent); font-weight: 700; }
+.skip-go { width: 100%; padding: 8px 0; font-size: 13px; }
+
+/* 转针：当前手感档标签 */
+.swing-diff {
+  margin-left: 8px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+}
 
 .llm-loading { padding: 9px 12px; color: #8a8f9f; font-size: 11px; text-align: center; animation: llm-loading-pulse 1.6s ease-in-out infinite; }
 @keyframes llm-loading-pulse { 0%, 100% { opacity: 0.5; } 50% { opacity: 1; } }

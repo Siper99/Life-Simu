@@ -1,5 +1,6 @@
 // 左侧角色状态面板：属性条、资源、身份、天赋、技能、关系网。
 
+import { getTalentRarity } from "../engine/talents";
 import { ATTR_LABELS, AttrKey, GameState, ageOf, lifeStageOf } from "../engine/types";
 import { useStore } from "../store/gameStore";
 import { FloatingDeltas } from "./FloatingDeltas";
@@ -71,7 +72,7 @@ export function StatusPanel({ game }: { game: GameState }) {
         <div className="status-section">
           <div className="status-heading">天赋</div>
           {c.talents.map((t) => (
-            <div key={t.id} className="talent-chip" title={t.desc}>
+            <div key={t.id} className={`talent-chip rarity-${getTalentRarity(t)}`} title={t.desc}>
               ✦ {t.name}
             </div>
           ))}

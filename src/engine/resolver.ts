@@ -11,6 +11,7 @@ import {
   GameState,
   StatDeltas,
   SwingCheck,
+  SwingVerdict,
   Tier,
   TIER_LABELS,
   ZoneWidths,
@@ -19,20 +20,23 @@ import {
 } from "./types";
 import { Rng } from "./rng";
 import { worldModifierFor } from "./decisions";
+import { skillForIntent } from "./skills";
 
 // ---------- 摆动条参数 ----------
 
 /**
- * 全局手感旋钮：时间窗 ∝ 区宽 ÷ 摆速，0.8 ≈ 判定比基准值容易 20%。
- * 减负平摊到两个维度（各 √EASE）：摆速 −11%、区宽 +12%，视觉上都不突兀。
+ * 全局手感旋钮：时间窗 ∝ 区宽 ÷ 摆速，0.8 ≈ 判定比原版基准容易 20%。
+ * 减负平摊到两个维度（各 √EASE）：摆速与区宽各担一半，视觉上都不突兀。
+ * 三档难度（设置页可选）都通过这一个旋钮实现。
  */
-const SWING_EASE = 0.8;
-const SPEED_SCALE = Math.sqrt(SWING_EASE);
-const ZONE_SCALE = 1 / SPEED_SCALE;
+export const SWING_EASE_LEVELS = { easy: 0.65, standard: 0.8, hard: 1.0 } as const;
+export type SwingDifficulty = keyof typeof SWING_EASE_LEVELS;
+export const DEFAULT_SWING_EASE = SWING_EASE_LEVELS.standard;
 
 /**
  * 摆速 ∝ 收益（好爆率跳得快），最佳区宽度 ∝ 1/难度。
  * 相关属性高 → 减速（最多 30%）+ 最佳区加宽（最多 40%）。
+ * baseBest 记录属性 50 时的区宽，UI 用它把属性加成画成独立的亮色层。
  */
 export function buildSwingCheck(
   id: string,
@@ -40,22 +44,37 @@ export function buildSwingCheck(
   difficulty: number,
   reward: number,
   attrValue: number,
+  attrName?: string,
+  ease: number = DEFAULT_SWING_EASE,
 ): SwingCheck {
+  const speedScale = Math.sqrt(ease);
+  const zoneScale = 1 / speedScale;
   const attrBonus = clamp((attrValue - 50) / 50, -0.5, 1); // -0.5 ~ 1
   const speedHz = clamp(
-    (0.55 + reward * 0.38) * SPEED_SCALE * (1 - 0.3 * Math.max(0, attrBonus)),
+    (0.55 + reward * 0.38) * speedScale * (1 - 0.3 * Math.max(0, attrBonus)),
     0.4,
-    2.35,
+    2.6 * speedScale,
   );
-  const bestBase = clamp((0.16 - difficulty * 0.0013) * ZONE_SCALE, 0.031, 0.18);
-  const best = clamp(bestBase * (1 + 0.4 * attrBonus), 0.022, 0.22);
+  const bestBase = clamp((0.16 - difficulty * 0.0013) * zoneScale, 0.028 * zoneScale, 0.16 * zoneScale);
+  const best = clamp(bestBase * (1 + 0.4 * attrBonus), 0.02 * zoneScale, 0.2 * zoneScale);
   const zones: ZoneWidths = {
     best,
-    success: clamp(best + (0.14 - difficulty * 0.0006) * ZONE_SCALE, best + 0.055, 0.36),
-    partial: clamp(best + (0.26 - difficulty * 0.0004) * ZONE_SCALE, best + 0.155, 0.44),
+    success: clamp(best + (0.14 - difficulty * 0.0006) * zoneScale, best + 0.05 * zoneScale, 0.36),
+    partial: clamp(best + (0.26 - difficulty * 0.0004) * zoneScale, best + 0.14 * zoneScale, 0.44),
     fail: 0.48, // |offset| > 0.48 → 大失败（两端各 2%）
   };
-  return { actionId: id, label, difficulty, reward, speedHz, zones };
+  return {
+    actionId: id,
+    label,
+    difficulty,
+    reward,
+    speedHz,
+    zones,
+    baseBest: bestBase,
+    attrName,
+    attrZonePct: Math.round(40 * attrBonus),
+    attrSpeedPct: Math.round(-30 * Math.max(0, attrBonus)),
+  };
 }
 
 /**
@@ -64,6 +83,22 @@ export function buildSwingCheck(
  */
 export function fumbleSaveChance(luck: number): number {
   return clamp(0.35 + luck * 0.003, 0.35, 0.68);
+}
+
+/**
+ * 转针判定收口：落点 → 档位 → 运气豁免掷点（消耗主 RNG，写回 rngState）。
+ * 在停针瞬间调用，UI 直接拿最终结论播演出；finalizeTurn 只读结果不再掷点。
+ */
+export function judgeSwing(state: GameState, check: SwingCheck, offset: number): SwingVerdict {
+  let tier = tierFromOffset(offset, check.zones);
+  let saved = false;
+  if (tier === "fumble") {
+    const rng = Rng.fromState(state.rngState);
+    saved = rng.chance(fumbleSaveChance(state.character.attrs.luck));
+    state.rngState = rng.getState();
+    if (saved) tier = "fail";
+  }
+  return { tier, saved };
 }
 
 /** offset = |停针位置 - 0.5|，映射到五档 */
@@ -164,10 +199,12 @@ export function resolveAction(
   if (profile.connections > 0 && mult > 0) {
     deltas.connections = Math.round(profile.connections * mult * rng.range(0.5, 1.5));
   }
-  if (profile.skillCat && mult > 0) {
+  // 技能是「手艺名词」不是行动描述：由 skills.ts 推断（意图自带 > 关键词 > 类别兜底 > 不积累）
+  const trained = mult > 0 ? skillForIntent(state, intent) : null;
+  if (trained) {
     deltas.skillXp.push({
-      name: intent.summary.slice(0, 12),
-      category: profile.skillCat,
+      name: trained.name,
+      category: trained.category,
       xp: Math.round(20 * mult * effort * worldMult),
     });
   }

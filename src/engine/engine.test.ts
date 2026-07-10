@@ -8,6 +8,7 @@ import {
   fallbackParseIntents,
   applyDeltas,
   fumbleSaveChance,
+  judgeSwing,
   resolveAction,
 } from "./resolver";
 import { pickEvent, EVENT_TABLE } from "./events";
@@ -60,6 +61,33 @@ describe("开局生成", () => {
     for (let i = 0; i < 20; i++) {
       const res = resolveAction(new Rng(i + 1), state, intent, "success");
       expect(res.deltas.money).toBe(0);
+    }
+  });
+
+  it("天赋池：规模、唯一性与数值边界", () => {
+    expect(TALENT_POOL.length).toBeGreaterThanOrEqual(300);
+    expect(new Set(TALENT_POOL.map((t) => t.id)).size).toBe(TALENT_POOL.length);
+    expect(new Set(TALENT_POOL.map((t) => t.name)).size).toBe(TALENT_POOL.length);
+    const validAttrs = new Set(["health", "fitness", "intelligence", "eq", "charm", "mood", "luck"]);
+    for (const talent of TALENT_POOL) {
+      expect(talent.name.length).toBeGreaterThanOrEqual(2);
+      expect(talent.desc.length).toBeGreaterThan(4);
+      let net = 0;
+      for (const [k, v] of Object.entries(talent.attrMods)) {
+        expect(validAttrs.has(k)).toBe(true);
+        expect(Math.abs(v as number)).toBeLessThanOrEqual(20); // 单项上限
+        net += v as number;
+      }
+      expect(net).toBeGreaterThanOrEqual(-5); // 双刃剑净值不为大负
+      expect(net).toBeLessThanOrEqual(32); // 总强度上限
+    }
+  });
+
+  it("同一局的三个天赋候选互不重复", () => {
+    for (let seed = 1; seed <= 30; seed++) {
+      const roll = rollGenesis(new Rng(seed));
+      const ids = roll.talentChoices.map((t) => t.id);
+      expect(new Set(ids).size).toBe(3);
     }
   });
 
@@ -120,7 +148,7 @@ describe("摆动条判定", () => {
     expect(fumbleSaveChance(999)).toBe(0.68);
   });
 
-  it("转针大失败约有一半被运气豁免为普通失败", () => {
+  it("停针判定：大失败约有一半被运气豁免为普通失败", () => {
     let saved = 0;
     let kept = 0;
     for (let seed = 1; seed <= 100; seed++) {
@@ -128,17 +156,13 @@ describe("摆动条判定", () => {
       const intents = fallbackParseIntents("去赌一把");
       const pending = beginTurn(state, "去赌一把", intents);
       expect(pending.checks.length).toBeGreaterThanOrEqual(1);
-      for (const check of pending.checks) {
-        pending.checkResults.push({ checkId: check.actionId, tier: "fumble", offset: 0.49 });
-      }
-      const outcome = finalizeTurn(state, pending);
-      const act = outcome.actions[0];
-      if (act.tier === "fail") {
+      const verdict = judgeSwing(state, pending.checks[0], 0.49);
+      if (verdict.saved) {
         saved++;
-        expect(act.mechanical).toContain("运气救场");
+        expect(verdict.tier).toBe("fail");
       } else {
         kept++;
-        expect(act.tier).toBe("fumble");
+        expect(verdict.tier).toBe("fumble");
       }
     }
     // 豁免率 0.35~0.65 之间，统计上应两边都有且大致对半
@@ -146,8 +170,44 @@ describe("摆动条判定", () => {
     expect(kept).toBeGreaterThan(25);
   });
 
+  it("finalizeTurn 尊重停针结果并在豁免时补充叙事标记", () => {
+    const { state } = newGameState(9);
+    const intents = fallbackParseIntents("去赌一把");
+    const pending = beginTurn(state, "去赌一把", intents);
+    pending.checkResults.push({
+      checkId: pending.checks[0].actionId,
+      tier: "fail",
+      offset: 0.49,
+      saved: true,
+    });
+    const outcome = finalizeTurn(state, pending);
+    expect(outcome.actions[0].tier).toBe("fail");
+    expect(outcome.actions[0].mechanical).toContain("运气救场");
+  });
+
+  it("难度三档：EASE 越小摆速越慢、区越宽", () => {
+    const easy = buildSwingCheck("a", "t", 70, 4, 50, "运气", 0.65);
+    const std = buildSwingCheck("b", "t", 70, 4, 50, "运气", 0.8);
+    const hard = buildSwingCheck("c", "t", 70, 4, 50, "运气", 1.0);
+    expect(easy.speedHz).toBeLessThan(std.speedHz);
+    expect(std.speedHz).toBeLessThan(hard.speedHz);
+    expect(easy.zones.success).toBeGreaterThan(std.zones.success);
+    expect(std.zones.success).toBeGreaterThan(hard.zones.success);
+  });
+
+  it("双层区宽：属性高时 best 超出 baseBest，属性 50 时相等", () => {
+    const strong = buildSwingCheck("a", "t", 60, 4, 95, "魅力");
+    expect(strong.zones.best).toBeGreaterThan(strong.baseBest);
+    expect(strong.attrZonePct).toBeGreaterThan(0);
+    expect(strong.attrSpeedPct).toBeLessThan(0);
+    const neutral = buildSwingCheck("b", "t", 60, 4, 50, "魅力");
+    expect(neutral.zones.best).toBeCloseTo(neutral.baseBest, 5);
+    expect(neutral.attrZonePct).toBe(0);
+  });
+
   it("高危行动成功档以上有 1.25 倍收益加成", () => {
     const { state } = newGameState(30);
+    state.world.year = state.character.birthYear + 20; // 成年才积累技能
     const mk = (risk: "low" | "high") => ({
       id: "x",
       summary: "学习",
@@ -284,6 +344,136 @@ describe("决策盘", () => {
     // 合并进看板且可被选中校验
     const board = getDecisionBoard(state, cards);
     expect(board.choices.some((c) => c.kind === "llm")).toBe(true);
+  });
+});
+
+describe("世界观：时代大事件与标题联动", () => {
+  it("大事年表按国家优先命中，无事年份返回 null", async () => {
+    const { epochEventFor } = await import("./decisions");
+    expect(epochEventFor(2003, "中国")?.title).toBe("非典");
+    expect(epochEventFor(2008, "中国")?.title).toBe("奥运与金融危机");
+    expect(epochEventFor(2008, "美国")?.title).toBe("全球金融危机");
+    expect(epochEventFor(2020, "日本")?.title).toBe("新冠疫情");
+    expect(epochEventFor(1999, "中国")).toBeNull();
+  });
+
+  it("大事件之年世界脉搏切换为事件本身并标记 major", async () => {
+    const { getWorldPulse } = await import("./decisions");
+    const { state } = newGameState(4);
+    state.background.country = "中国";
+    state.world.year = 2003;
+    const pulse = getWorldPulse(state);
+    expect(pulse.major).toBe(true);
+    expect(pulse.title).toBe("非典");
+    state.world.year = 1999;
+    expect(getWorldPulse(state).major).toBe(false);
+  });
+
+  it("决策盘标题随处境变化", async () => {
+    const { getDecisionBoard } = await import("./decisions");
+    const { state } = newGameState(5);
+    state.background.country = "中国";
+    state.world.year = 1999; // 无大事年份
+    state.character.money = 100;
+    expect(getDecisionBoard(state).headline).toContain("怎么过");
+    state.character.money = -50;
+    expect(getDecisionBoard(state).headline).toContain("欠着钱");
+    state.world.year = 2020;
+    expect(getDecisionBoard(state).headline).toContain("新冠疫情"); // 大事件优先于危机
+  });
+
+  it("跨年进入大事件年份时产生被动记录", () => {
+    const { state } = newGameState(6);
+    state.background.country = "中国";
+    state.granularity = "week";
+    state.world.year = 2002;
+    state.world.week = 52;
+    const notes = fastForward(state, 1);
+    expect(notes.some((n) => n.includes("非典"))).toBe(true);
+  });
+});
+
+describe("技能定义：手艺名词而非行动描述", () => {
+  const mkIntent = (over: Record<string, unknown>) => ({
+    id: "x", summary: "随便做点什么", category: "leisure" as const, hours: 20,
+    risk: "low" as const, attr: "mood" as const, nsfw: false, ...over,
+  });
+
+  it("学业按人生阶段归一化命名", async () => {
+    const { skillForIntent } = await import("./skills");
+    const { state } = newGameState(11);
+    state.world.year = state.character.birthYear + 10;
+    expect(skillForIntent(state, mkIntent({ category: "study", summary: "认真读书" }))).toEqual(
+      { name: "小学课业", category: "学业" },
+    );
+    state.world.year = state.character.birthYear + 16;
+    expect(skillForIntent(state, mkIntent({ category: "study", summary: "刷题" }))?.name).toBe("高中课业");
+  });
+
+  it("关键词能认出具体手艺", async () => {
+    const { skillForIntent } = await import("./skills");
+    const { state } = newGameState(12);
+    state.world.year = state.character.birthYear + 14;
+    expect(skillForIntent(state, mkIntent({ summary: "放学后偷偷练吉他" }))).toEqual(
+      { name: "乐器", category: "爱好" },
+    );
+    expect(skillForIntent(state, mkIntent({ summary: "跟爷爷学木工", category: "adventure" }))).toEqual(
+      { name: "手工", category: "爱好" },
+    );
+  });
+
+  it("意图自带技能名优先，学龄前与纯玩乐不积累", async () => {
+    const { skillForIntent } = await import("./skills");
+    const { state } = newGameState(13);
+    state.world.year = state.character.birthYear + 20;
+    expect(skillForIntent(state, mkIntent({ skill: "烘焙" }))?.name).toBe("烘焙");
+    expect(skillForIntent(state, mkIntent({ summary: "看电视发呆" }))).toBeNull(); // 玩就是玩
+    state.world.year = state.character.birthYear + 3;
+    expect(skillForIntent(state, mkIntent({ category: "study", summary: "认字" }))).toBeNull(); // 学龄前
+  });
+
+  it("结算不再把行动描述当技能名", () => {
+    const { state } = newGameState(14);
+    state.world.year = state.character.birthYear + 10;
+    const study = resolveAction(new Rng(1), state, {
+      id: "a", summary: "把功课做扎实做到深夜", category: "study", hours: 20,
+      risk: "low", attr: "intelligence", nsfw: false,
+    }, "success");
+    expect(study.deltas.skillXp[0].name).toBe("小学课业");
+    const play = resolveAction(new Rng(2), state, {
+      id: "b", summary: "反复摆弄一个玩具", category: "leisure", hours: 20,
+      risk: "low", attr: "mood", nsfw: false,
+    }, "success");
+    expect(play.deltas.skillXp).toHaveLength(0);
+  });
+});
+
+describe("叙事线头解析", () => {
+  it("断句兜底：半句裁到句读，完整句与无句读原样保留", async () => {
+    const { trimToSentenceEnd } = await import("../llm/prompts");
+    expect(trimToSentenceEnd("这是完整的一句。")).toBe("这是完整的一句。");
+    expect(trimToSentenceEnd("这个故事讲了很久很久，终于讲完了。然后被截")).toBe(
+      "这个故事讲了很久很久，终于讲完了。",
+    );
+    expect(trimToSentenceEnd("完全没有句读的一段话被截断了")).toBe("完全没有句读的一段话被截断了");
+    // 裁剪会丢掉一半以上内容时保留原文
+    expect(trimToSentenceEnd("短。" + "很长的半句".repeat(10))).toBe("短。" + "很长的半句".repeat(10));
+  });
+
+  it("拆出正文与 HOOKS，坏 JSON 与缺失都静默降级", async () => {
+    const { splitNarrativeHooks } = await import("../llm/prompts");
+    const good = splitNarrativeHooks('这周你过得不错。\nHOOKS:["李老师注意到了你的画","期末考试临近"]');
+    expect(good.text).toBe("这周你过得不错。");
+    expect(good.hooks).toEqual(["李老师注意到了你的画", "期末考试临近"]);
+    const none = splitNarrativeHooks("平淡的一周。");
+    expect(none.text).toBe("平淡的一周。");
+    expect(none.hooks).toEqual([]);
+    const bad = splitNarrativeHooks("有事发生。\nHOOKS:[损坏的");
+    expect(bad.text).toBe("有事发生。");
+    expect(bad.hooks).toEqual([]);
+    const empty = splitNarrativeHooks("无事。\nHOOKS:[]");
+    expect(empty.text).toBe("无事。");
+    expect(empty.hooks).toEqual([]);
   });
 });
 

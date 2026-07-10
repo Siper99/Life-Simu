@@ -74,24 +74,8 @@ const PARENT_JOBS: Record<string, string[]> = {
 
 const PERSONALITIES = ["温和","严厉","急躁","乐观","悲观","沉默寡言","热情","控制欲强","溺爱","冷漠","幽默","迷信","要强","佛系","酗酒","勤俭","虚荣","正直"];
 
-export const TALENT_POOL: Talent[] = [
-  { id: "genius", name: "天生聪慧", desc: "智力 +15，学习类行动更容易成功", attrMods: { intelligence: 15 }, tags: ["学习"] },
-  { id: "beauty", name: "倾国倾城", desc: "魅力 +18，但容易招来是非", attrMods: { charm: 18 }, tags: ["社交", "麻烦"] },
-  { id: "ironbody", name: "钢筋铁骨", desc: "体质 +15，健康 +10，很少生病", attrMods: { fitness: 15, health: 10 }, tags: ["身体"] },
-  { id: "lucky", name: "锦鲤附体", desc: "运气 +20，好事更容易找上门", attrMods: { luck: 20 }, tags: ["运气"] },
-  { id: "silvertongue", name: "巧舌如簧", desc: "情商 +12，魅力 +6，谈判与社交占优", attrMods: { eq: 12, charm: 6 }, tags: ["社交"] },
-  { id: "steadyheart", name: "心如止水", desc: "心境 +15，不易被挫折击垮", attrMods: { mood: 15 }, tags: ["心理"] },
-  { id: "moneysense", name: "财运亨通", desc: "对钱有天生的嗅觉，理财类行动占优", attrMods: { luck: 6 }, tags: ["财富"] },
-  { id: "artsoul", name: "艺术之魂", desc: "对美有天生的感知，艺术类技能成长快", attrMods: { charm: 6, eq: 6 }, tags: ["艺术"] },
-  { id: "nightowl", name: "过目不忘", desc: "智力 +10，学到的东西很少遗忘", attrMods: { intelligence: 10 }, tags: ["学习"] },
-  { id: "wildheart", name: "冒险基因", desc: "胆子大，冒险类行动大成功率更高，但也更容易受伤", attrMods: { fitness: 5, luck: 5 }, tags: ["冒险"] },
-  { id: "empath", name: "共情大师", desc: "情商 +15，总能读懂别人的心思", attrMods: { eq: 15 }, tags: ["社交"] },
-  { id: "sickly", name: "多愁多病身", desc: "健康 -10，但智力 +12、情商 +8——脆弱造就敏感", attrMods: { health: -10, intelligence: 12, eq: 8 }, tags: ["代价"] },
-  { id: "plainlife", name: "平凡是福", desc: "全属性 +4，没有短板也没有长板", attrMods: { health: 4, fitness: 4, intelligence: 4, eq: 4, charm: 4, mood: 4, luck: 4 }, tags: ["均衡"] },
-  { id: "ironwill", name: "钢铁意志", desc: "心境 +10，体质 +8，失败摧不垮你", attrMods: { mood: 10, fitness: 8 }, tags: ["心理"] },
-  { id: "charisma", name: "天生领袖", desc: "魅力 +10，情商 +8，人们愿意追随你", attrMods: { charm: 10, eq: 8 }, tags: ["社交"] },
-  { id: "badluck", name: "天煞孤星", desc: "运气 -15，但智力 +15、心境 +10——逆境中成长", attrMods: { luck: -15, intelligence: 15, mood: 10 }, tags: ["代价"] },
-];
+import { TALENT_POOL } from "./talents";
+export { TALENT_POOL };
 
 function rollAttr(rng: Rng): number {
   // 两次取样求均值，向中间收敛，极端值稀有
@@ -264,6 +248,7 @@ export function newGameState(
     monthlySummaries: [],
     chronicle: [],
     decisionHistory: [],
+    hooks: [],
     pending: null,
     ended: false,
   };

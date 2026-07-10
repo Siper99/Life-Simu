@@ -12,12 +12,14 @@ const CATEGORY_NAMES = {
 } as const;
 
 export function GameScreen() {
-  const { game, phase, currentCheckIndex, submitTurn, submitChoices, reportSwing,
+  const { game, phase, currentCheckIndex, submitTurn, submitChoices, judgeSwing, confirmSwing,
     doFastForward, setScreen, lastError, llmChoices } = useStore();
   const [input, setInput] = useState("");
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [customOpen, setCustomOpen] = useState(false);
   const [selectionMessage, setSelectionMessage] = useState<string | null>(null);
+  const [skipOpen, setSkipOpen] = useState(false);
+  const [skipIdx, setSkipIdx] = useState(0);
   const logRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -42,6 +44,14 @@ export function GameScreen() {
   const currentCheck = phase === "swinging" && game.pending
     ? game.pending.checks[currentCheckIndex] : null;
   const unitLabel = game.granularity === "week" ? "周" : game.granularity === "month" ? "月" : "年";
+  // 跳过时间的档位：随粒度换算，覆盖 1 单位到 1 年
+  const skipOptions =
+    game.granularity === "week"
+      ? [{ turns: 1, label: "1周" }, { turns: 4, label: "1个月" }, { turns: 13, label: "3个月" }, { turns: 26, label: "半年" }, { turns: 52, label: "1年" }]
+      : game.granularity === "month"
+        ? [{ turns: 1, label: "1个月" }, { turns: 3, label: "3个月" }, { turns: 6, label: "半年" }, { turns: 9, label: "9个月" }, { turns: 12, label: "1年" }]
+        : [{ turns: 1, label: "1年" }, { turns: 2, label: "2年" }, { turns: 3, label: "3年" }];
+  const skipPick = skipOptions[Math.min(skipIdx, skipOptions.length - 1)];
   const selectedChoices = board?.choices.filter((choice) => selectedIds.includes(choice.id)) ?? [];
   const timeUsed = selectedChoices.reduce((sum, choice) => sum + choice.timeCost, 0);
   const energyUsed = selectedChoices.reduce((sum, choice) => sum + Math.max(0, choice.energyCost), 0);
@@ -81,17 +91,39 @@ export function GameScreen() {
         <header className="game-header">
           <span className="game-date">{formatDate(game)}</span>
           <div className="game-header-actions">
-            {!game.ended && <button className="btn-ghost" disabled={busy}
-              title="不做主动选择，但世界仍会继续运转" onClick={() => doFastForward(1)}>
-              跳过这一{unitLabel}
-            </button>}
+            {!game.ended && <div className="skip-wrap">
+              <button className="btn-ghost" disabled={busy}
+                title="不做主动选择，让一段时光自然流逝" onClick={() => setSkipOpen(!skipOpen)}>
+                ⏭ 跳过时间
+              </button>
+              {skipOpen && <div className="skip-panel">
+                <input
+                  type="range"
+                  className="skip-range"
+                  min={0}
+                  max={skipOptions.length - 1}
+                  step={1}
+                  value={Math.min(skipIdx, skipOptions.length - 1)}
+                  onChange={(e) => setSkipIdx(Number(e.target.value))}
+                />
+                <div className="skip-marks">
+                  {skipOptions.map((o, i) => (
+                    <span key={o.label} className={i === skipIdx ? "active" : ""}>{o.label}</span>
+                  ))}
+                </div>
+                <button className="btn-primary skip-go" disabled={busy}
+                  onClick={() => { setSkipOpen(false); void doFastForward(skipPick.turns, skipPick.label); }}>
+                  随波逐流 {skipPick.label}
+                </button>
+              </div>}
+            </div>}
             <button className="btn-ghost" onClick={() => setScreen("settings")}>⚙ 设置</button>
             <button className="btn-ghost" onClick={() => setScreen("menu")}>☰ 菜单</button>
           </div>
         </header>
 
-        {board && <section className="world-pulse">
-          <div className="world-pulse-mark">WORLD · {board.world.trend}</div>
+        {board && <section className={`world-pulse${board.world.major ? " world-pulse-major" : ""}`}>
+          <div className="world-pulse-mark">{board.world.major ? "⚑ 大事件" : "WORLD"} · {board.world.trend}</div>
           <div><strong>{board.world.title}</strong><p>{board.world.summary}</p></div>
           <span>利好 {board.world.boosted.map((category) => CATEGORY_NAMES[category]).join(" · ")}</span>
         </section>}
@@ -113,7 +145,7 @@ export function GameScreen() {
 
       {!game.ended && board && <aside className="decision-panel">
         <div className="decision-head">
-          <div><span className="decision-kicker">DECISION BOARD</span><h2>这一{unitLabel}怎么过？</h2></div>
+          <div><span className="decision-kicker">DECISION BOARD</span><h2>{board.headline}</h2></div>
           <div className="time-budget" aria-label={`${board.timeLabel}已使用 ${timeUsed} 格，共 ${board.timeBudget} 格`}>
             {Array.from({ length: board.timeBudget }, (_, index) =>
               <span key={index} className={index < timeUsed ? "used" : ""} />)}
@@ -173,7 +205,7 @@ export function GameScreen() {
       </aside>}
 
       {currentCheck && <SwingBar key={currentCheck.actionId} check={currentCheck}
-        onStop={(offset) => void reportSwing(offset)} />}
+        onJudge={judgeSwing} onDone={() => void confirmSwing()} />}
     </div>
   );
 }
