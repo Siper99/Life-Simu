@@ -893,6 +893,55 @@ describe("场景模式：时间冻结的连续对手戏", () => {
     expect(settleScene(state)).toEqual([]);
     expect(state.scene).toBeNull();
   });
+
+  it("场景后果净化：数值 clamp、花销不超钱包+小额透支、法律走白名单", async () => {
+    const { sanitizeSceneEffects } = await import("./scene");
+    const { state } = newGameState(73);
+    state.world.year = state.character.birthYear + 25;
+    state.character.money = 1000;
+    state.character.identity.job = { title: "程序员", employer: "x", weeklyHours: 40, weeklyPay: 2000, track: "技术", level: 1, xp: 0 };
+    const fx = sanitizeSceneEffects(state, {
+      money: -99999, mood: 50, affinity: -99, connections: 9,
+      legal: "越狱中", conditions_add: ["受了一点小伤但是问题不大", "轻伤", "第三条被裁"], conditions_remove: "不是数组",
+    });
+    expect(fx.money).toBe(-6000); // 钱包 1000 + 透支 5000
+    expect(fx.mood).toBe(8);
+    expect(fx.affinity).toBe(-10);
+    expect(fx.connections).toBe(3);
+    expect(fx.legal).toBeNull(); // 白名单之外的法律状态被丢弃
+    expect(fx.conditionsAdd).toEqual(["受了一点小伤但是", "轻伤"]);
+    expect(fx.conditionsRemove).toEqual([]);
+    expect(sanitizeSceneEffects(state, "垃圾").money).toBe(0);
+    // 合法的法律状态变化被保留
+    expect(sanitizeSceneEffects(state, { legal: "通缉" }).legal).toBe("通缉");
+  });
+
+  it("场景后果实时落地：钱包、好感、法律状态与状态列表", async () => {
+    const { applySceneEffects, emptySceneEffects } = await import("./scene");
+    const { state } = newGameState(74);
+    state.world.year = state.character.birthYear + 25;
+    state.character.money = 5000;
+    const npc = state.character.npcs[0];
+    const affinityBefore = npc.affinity;
+    const fx = { ...emptySceneEffects(), money: -2000, affinity: 6, legal: "通缉" as const, conditionsAdd: ["轻伤"] };
+    const notes = applySceneEffects(state, npc.name, fx);
+    expect(state.character.money).toBe(3000);
+    expect(npc.affinity).toBe(affinityBefore + 6);
+    expect(state.character.identity.legalStatus).toBe("通缉");
+    expect(state.character.identity.conditions).toContain("轻伤");
+    expect(notes.join("，")).toContain("⚖️ 法律处境：通缉");
+  });
+
+  it("被通缉/服刑时决策盘标题直说", async () => {
+    const { getDecisionBoard } = await import("./decisions");
+    const { state } = newGameState(75);
+    state.background.country = "中国";
+    state.world.year = 2019; // 无大事年份，避免标题被时代事件接管
+    state.character.identity.legalStatus = "通缉";
+    expect(getDecisionBoard(state).headline).toContain("警察在找你");
+    state.character.identity.legalStatus = "服刑";
+    expect(getDecisionBoard(state).headline).toContain("高墙内");
+  });
 });
 
 describe("人生阶段与粒度", () => {

@@ -744,6 +744,9 @@ button {
 .lifestyle-btn:hover { border-color: #5a6172; color: #cfd4de; }
 .lifestyle-btn.active { border-color: rgba(232, 184, 75, 0.6); background: rgba(148, 112, 28, 0.18); color: #ecd193; font-weight: 700; }
 
+/* 法律处境（非清白时才显示） */
+.legal-status { color: #ef8f88; font-weight: 700; }
+
 /* 场景模式：镜头拉近的连续对手戏 */
 .scene-panel { border-color: rgba(126, 76, 161, 0.5); }
 .scene-hint { font-size: 12px; color: #9aa1b0; line-height: 1.6; margin: 4px 0 10px; }

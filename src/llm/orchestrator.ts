@@ -20,6 +20,7 @@ import {
   sceneSystem,
   sceneUserPrompt,
   skipUserPrompt,
+  splitSceneEffects,
   splitNarrativeHooks,
   trimToSentenceEnd,
 } from "./prompts";
@@ -170,21 +171,32 @@ export async function narrateSkip(
   }
 }
 
+/** 离线时的最小后果识别：只认得「花钱」这类明确表达，其余交给收场结算 */
+function fallbackSceneEffects(playerText: string): unknown {
+  return /买|送|我请|请客|请你|请他|请她|请.{0,4}吃|付账|付钱|结账|掏钱|打赏/.test(playerText)
+    ? { money: -200 }
+    : null;
+}
+
 /**
  * 场景模式的一拍：NSFW 场景全程路由到 nsfw 后端（带完整场景记录，保证连续性），
  * 普通场景走主叙事后端；未配置时用模板兜底，游戏离线仍可完整收场结算。
+ * effects 为正文尾行 EFFECTS:{...} 的原始解析结果——调用方必须经
+ * sanitizeSceneEffects 净化后才能落地（引擎持数值真值）。
  */
 export async function narrateSceneBeat(
   settings: AppSettings,
   state: GameState,
   scene: SceneState,
   playerText: string,
-): Promise<{ text: string; usedLlm: boolean }> {
+): Promise<{ text: string; usedLlm: boolean; effects: unknown }> {
   const nsfwProfile = profileForRole(settings, "nsfw");
   const onNsfwBackend =
     scene.nsfw && settings.contentRating === "explicit" && Boolean(nsfwProfile);
   const profile = onNsfwBackend ? nsfwProfile : profileForRole(settings, "narrative");
-  if (!profile) return { text: fallbackSceneBeat(scene, playerText), usedLlm: false };
+  if (!profile) {
+    return { text: fallbackSceneBeat(scene, playerText), usedLlm: false, effects: fallbackSceneEffects(playerText) };
+  }
   try {
     const raw = await chat(
       profile,
@@ -194,10 +206,11 @@ export async function narrateSceneBeat(
       ],
       { temperature: 0.95, maxTokens: 900, purpose: onNsfwBackend ? "场景·NSFW" : "场景" },
     );
-    return { text: trimToSentenceEnd(raw.trim()), usedLlm: true };
+    const { text, effects } = splitSceneEffects(raw.trim());
+    return { text: trimToSentenceEnd(text), usedLlm: true, effects };
   } catch (e) {
     console.warn("场景演出走兜底：", e);
-    return { text: fallbackSceneBeat(scene, playerText), usedLlm: false };
+    return { text: fallbackSceneBeat(scene, playerText), usedLlm: false, effects: fallbackSceneEffects(playerText) };
   }
 }
 

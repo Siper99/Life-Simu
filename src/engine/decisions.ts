@@ -678,6 +678,8 @@ export function boardHeadline(state: GameState, world: WorldPulse, unitLabel: st
   const c = state.character;
   const ask = `这一${unitLabel}怎么过？`;
   if (world.major) return `「${world.title}」来了——${ask}`;
+  if (c.identity.legalStatus === "通缉") return `警察在找你——${ask}`;
+  if (c.identity.legalStatus === "服刑") return `高墙内的日子——${ask}`;
   const schooling = c.identity.schooling ?? "";
   if (schooling.includes("初中3")) return `中考就在今年——${ask}`;
   if (schooling.includes("高中3")) return `高考近在眼前——${ask}`;

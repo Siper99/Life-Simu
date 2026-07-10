@@ -21,7 +21,7 @@ import {
 import { narrateSceneBeat, narrateSkip, narrateTurn, parseIntents, proposeChoices, writeEpitaph } from "../llm/orchestrator";
 import { NSFW_MEMORY_PLACEHOLDER } from "../llm/prompts";
 import { profileForRole as profileForRoleFn } from "../llm/types";
-import { SCENE_BEAT_ENERGY, applySceneBeatCost, beginScene, canEnterScene, sceneBeatError, settleScene } from "../engine/scene";
+import { SCENE_BEAT_ENERGY, applySceneBeatCost, applySceneEffects, beginScene, canEnterScene, sanitizeSceneEffects, sceneBeatError, settleScene } from "../engine/scene";
 import { AppSettings, DEFAULT_SETTINGS, profileForRole } from "../llm/types";
 import * as persist from "./persist";
 
@@ -360,9 +360,34 @@ export const useStore = create<Store>((set, get) => ({
     game.log.push({ turn: game.turn, date: formatDate(game), kind: "player", text, nsfw: nsfwFlag });
     set({ game: touch(game) });
     try {
-      const { text: beat } = await narrateSceneBeat(settings, game, game.scene, text);
+      const { text: beat, effects } = await narrateSceneBeat(settings, game, game.scene, text);
       game.scene.beats.push({ player: text, narrative: beat });
       game.log.push({ turn: game.turn, date: formatDate(game), kind: "narrative", text: beat, nsfw: nsfwFlag });
+
+      // 戏里发生的事当场落到真值：净化 → 应用 → 浮字 + 后果日志（实时反馈）
+      const fx = sanitizeSceneEffects(game, effects);
+      const fxNotes = applySceneEffects(game, game.scene.target, fx);
+      if (fxNotes.length > 0) {
+        game.log.push({ turn: game.turn, date: formatDate(game), kind: "system", text: `【场景后果】${fxNotes.join("，")}` });
+        const sign = (v: number) => (v > 0 ? `+${v}` : `${v}`);
+        const chips: FloatChip[] = [];
+        if (fx.money) chips.push({ text: `${sign(fx.money)} 金钱`, kind: fx.money > 0 ? "up" : "down" });
+        if (fx.mood) chips.push({ text: `${sign(fx.mood)} 心境`, kind: fx.mood > 0 ? "up" : "down" });
+        if (fx.affinity && game.scene.target) {
+          chips.push({ text: `${game.scene.target} 好感${sign(fx.affinity)}`, kind: fx.affinity > 0 ? "up" : "down" });
+        }
+        if (fx.connections) chips.push({ text: `${sign(fx.connections)} 人脉`, kind: fx.connections > 0 ? "up" : "down" });
+        if (fx.legal) chips.push({ text: `⚖️ ${fx.legal}`, kind: "gold" });
+        for (const cond of fx.conditionsAdd) chips.push({ text: `🩹 ${cond}`, kind: "down" });
+        for (const cond of fx.conditionsRemove) chips.push({ text: `✚ 解除${cond}`, kind: "up" });
+        set({
+          floats: {
+            seq: (get().floats?.seq ?? 0) + 1,
+            chips: chips.slice(0, 8),
+            attrDeltas: fx.mood ? { mood: fx.mood } : {},
+          },
+        });
+      }
     } finally {
       set({ game: touch(game), phase: "idle" });
       await persist.saveGame(game);

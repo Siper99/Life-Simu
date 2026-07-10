@@ -163,7 +163,28 @@ export function sceneSystem(
 - 对手是活人：有自己的心思、情绪和底线，会回应也会拒绝，不迎合、不复读玩家的话。
 - 结尾停在玩家可以接话的瞬间；绝不替玩家说话、行动或做决定。
 - ${directive}
-只输出这一拍的正文，不要任何元信息。`;
+- 正文结束后另起一行，输出 EFFECTS:{...}——这一拍**已经实际发生**的数值后果（JSON，所有字段可省略）：
+  money（花掉为负、得到为正的金额，如买单/送礼/赔钱）、affinity（对手对你观感变化 -10~10）、
+  mood（你的心境变化 -8~8）、connections（人脉 -3~3）、
+  legal（"清白/缓刑/服刑/通缉"，仅当这一拍发生了改变法律处境的事件，如报警被立案、被逮捕）、
+  conditions_add（新增状态，如 ["轻伤"]）、conditions_remove（解除的状态）。
+  只记录已发生的事实，不预测未来；没有变化就输出 EFFECTS:{}`;
+}
+
+/** 拆出场景正文与 EFFECTS 尾行；EFFECTS 无论好坏都从正文剥掉，解析失败静默降级 */
+export function splitSceneEffects(raw: string): { text: string; effects: unknown } {
+  const m = raw.match(/([\s\S]*?)\n?\s*EFFECTS[:：]\s*([\s\S]*)$/);
+  if (!m) return { text: raw.trim(), effects: null };
+  let effects: unknown = null;
+  const json = m[2].match(/\{[\s\S]*\}/);
+  if (json) {
+    try {
+      effects = JSON.parse(json[0]);
+    } catch {
+      // JSON 坏了就只保正文
+    }
+  }
+  return { text: m[1].trim(), effects };
 }
 
 export function sceneUserPrompt(state: GameState, scene: SceneState, playerText: string): string {

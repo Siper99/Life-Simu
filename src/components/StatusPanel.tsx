@@ -103,6 +103,7 @@ export function StatusPanel({ game }: { game: GameState }) {
           <div className="career-progress">晋升进度 {c.identity.job.xp}/100 · 周薪 {c.identity.job.weeklyPay}</div>
         )}
         <div>💕 {c.identity.maritalStatus}</div>
+        {c.identity.legalStatus !== "清白" && <div className="legal-status">⚖️ {c.identity.legalStatus}</div>}
         {c.identity.conditions.length > 0 && <div>🩹 {c.identity.conditions.join("、")}</div>}
       </div>
 

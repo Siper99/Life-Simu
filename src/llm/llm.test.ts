@@ -150,11 +150,30 @@ describe("场景模式路由：连续对手戏的每一拍", () => {
     expect(String(mockedChat.mock.calls[0][1][0].content)).toContain("镜头拉远");
   });
 
-  it("无后端时模板兜底，游戏离线可玩", async () => {
+  it("无后端时模板兜底，游戏离线可玩；花钱表达有最小后果识别", async () => {
     const { state } = newGameState(5);
     const res = await narrateSceneBeat(explicitSettings([]), state, mkScene(false), "说点什么");
     expect(res.usedLlm).toBe(false);
     expect(res.text).toContain("离线模式");
+    expect(res.effects).toBeNull();
+    const spend = await narrateSceneBeat(explicitSettings([]), state, mkScene(false), "请她吃一顿大餐");
+    expect(spend.effects).toEqual({ money: -200 });
+  });
+
+  it("EFFECTS 尾行被剥离并透传给净化器", async () => {
+    mockedChat.mockClear();
+    mockedChat.mockResolvedValueOnce('她收下了项链，脸红了。\nEFFECTS:{"money":-2000,"affinity":6}');
+    const { state } = newGameState(5);
+    const res = await narrateSceneBeat(explicitSettings([official]), state, mkScene(false), "把项链递过去");
+    expect(res.text).toBe("她收下了项链，脸红了。");
+    expect(res.effects).toEqual({ money: -2000, affinity: 6 });
+  });
+
+  it("splitSceneEffects：缺失、空对象与坏 JSON 都静默降级", async () => {
+    const { splitSceneEffects } = await import("./prompts");
+    expect(splitSceneEffects("正文。\nEFFECTS:{}")).toEqual({ text: "正文。", effects: {} });
+    expect(splitSceneEffects("正文而已。")).toEqual({ text: "正文而已。", effects: null });
+    expect(splitSceneEffects("正文。\nEFFECTS:{坏的")).toEqual({ text: "正文。", effects: null });
   });
 });
 

@@ -66,7 +66,7 @@ export function statusCard(state: GameState): string {
     `属性（100为人类极限）：${attrs}`,
     `先天基线（伤病可跌破）：${baselines}`,
     `精力：${c.energy}/100（${energyStateLabel(c.energy)}）｜金钱：${c.money}${age >= 18 ? `（${LIFESTYLES[lifestyleOf(state)].label}生活）` : ""}｜人脉：${c.connections}`,
-    `身份：${identities}｜婚恋：${c.identity.maritalStatus}${c.identity.conditions.length > 0 ? `｜状态：${c.identity.conditions.join("、")}` : ""}`,
+    `身份：${identities}｜婚恋：${c.identity.maritalStatus}${c.identity.legalStatus !== "清白" ? `｜法律处境：${c.identity.legalStatus}` : ""}${c.identity.conditions.length > 0 ? `｜状态：${c.identity.conditions.join("、")}` : ""}`,
     `天赋：${c.talents.map((t) => t.name).join("、") || "无"}`,
     skills ? `技能：${skills}` : "",
     npcs ? `关系：${npcs}` : "",
