@@ -7,7 +7,7 @@ import type { LlmProfile } from "./types";
 vi.mock("@tauri-apps/plugin-http", () => ({ fetch: vi.fn() }));
 const fetchMock = vi.fn();
 vi.stubGlobal("fetch", fetchMock);
-const { chat } = await import("./client");
+const { chat, llmCallLog, clearLlmCallLog } = await import("./client");
 
 const profile: LlmProfile = {
   id: "t", name: "测试", kind: "openai", baseURL: "http://localhost/v1",
@@ -59,5 +59,37 @@ describe("chat 自动续写", () => {
     ]);
     expect(await chat(profile, [{ role: "user", content: "x" }])).toBe("一二三");
     expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+});
+
+describe("LLM 路由审计日志", () => {
+  beforeEach(() => {
+    fetchMock.mockReset();
+    clearLlmCallLog();
+  });
+
+  it("成功请求记录用途、后端与返回字数", async () => {
+    queueReplies([{ content: "好的。", finish: "stop" }]);
+    await chat(profile, [{ role: "user", content: "hi" }], { purpose: "叙事" });
+    const log = llmCallLog();
+    expect(log).toHaveLength(1);
+    expect(log[0]).toMatchObject({
+      purpose: "叙事",
+      profileName: "测试",
+      kind: "openai",
+      model: "m",
+      status: "ok",
+      chars: 3,
+    });
+  });
+
+  it("失败请求也留痕并照常抛错，未标注用途有兜底文案", async () => {
+    fetchMock.mockResolvedValueOnce({ ok: false, status: 500, text: async () => "boom", json: async () => ({}) });
+    await expect(chat(profile, [{ role: "user", content: "hi" }])).rejects.toThrow();
+    const log = llmCallLog();
+    expect(log).toHaveLength(1);
+    expect(log[0].status).toBe("error");
+    expect(log[0].purpose).toBe("未标注");
+    expect(log[0].error).toContain("500");
   });
 });

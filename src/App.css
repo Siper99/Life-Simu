@@ -761,6 +761,17 @@ button {
 .dev-btn:hover:not(:disabled) { border-color: rgba(232, 184, 75, 0.55); color: #ecd193; }
 .dev-btn:disabled { opacity: 0.45; cursor: default; }
 .dev-revive { width: 100%; padding: 7px 0; color: #9fd8b4; border-color: rgba(84, 176, 122, 0.5); }
+.dev-heading-row { display: flex; justify-content: space-between; align-items: center; gap: 6px; }
+.dev-empty { font-size: 11px; color: #7a8090; line-height: 1.5; }
+.dev-call { display: flex; align-items: center; gap: 6px; font-size: 11px; color: #b8becc; padding: 2px 4px; border-radius: 6px; }
+.dev-call-time { color: #7a8090; flex: none; }
+.dev-call-purpose { flex: none; font-weight: 700; }
+.dev-call-target { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dev-call-stat { flex: none; color: #7a8090; }
+.dev-call-nsfw { background: rgba(126, 76, 161, 0.18); }
+.dev-call-nsfw .dev-call-purpose { color: #d8b5ef; }
+.dev-call-err { background: rgba(160, 63, 53, 0.16); }
+.dev-call-err .dev-call-purpose { color: #efaaa3; }
 
 /* 动用人脉护航开关（决策盘页脚） */
 .backing-toggle { display: flex; align-items: center; gap: 7px; padding: 6px 10px; border-radius: 8px; border: 1px dashed rgba(84, 176, 122, 0.45); color: #9fd8b4; font-size: 12px; cursor: pointer; user-select: none; }

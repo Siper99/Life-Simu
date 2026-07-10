@@ -2,6 +2,7 @@
 // 仅供调试：不走判定、不写叙事；时间快进只做被动结算（fastForward）。
 
 import { useState } from "react";
+import { clearLlmCallLog, llmCallLog } from "../llm/client";
 import { ATTR_LABELS, AttrKey, GameState, ageOf, formatDate } from "../engine/types";
 import { useStore } from "../store/gameStore";
 
@@ -11,6 +12,8 @@ export function DevPanel({ game }: { game: GameState }) {
   const c = game.character;
   const age = ageOf(game);
   const [targetAge, setTargetAge] = useState(Math.min(age + 5, 100));
+  const [logTick, setLogTick] = useState(0);
+  const calls = [...llmCallLog()].reverse().slice(0, 12);
 
   const setAttr = (k: AttrKey, raw: number) => devMutate((g) => {
     const v = Math.max(0, Math.min(100, Math.round(raw) || 0));
@@ -83,6 +86,30 @@ export function DevPanel({ game }: { game: GameState }) {
             出发
           </button>
         </div>
+      </div>
+
+      <div className="dev-section" data-tick={logTick}>
+        <div className="dev-heading dev-heading-row">
+          <span>LLM 路由日志（哪类请求发给了哪个后端）</span>
+          <span>
+            <button className="dev-btn" onClick={() => setLogTick((t) => t + 1)}>刷新</button>
+            <button className="dev-btn" onClick={() => { clearLlmCallLog(); setLogTick((t) => t + 1); }}>清空</button>
+          </span>
+        </div>
+        {calls.length === 0 ? (
+          <div className="dev-empty">还没有 LLM 请求：未配置后端，或本局全走离线兜底。控制台（F12）也会打印每条 [LLM路由] 记录。</div>
+        ) : (
+          calls.map((r, i) => (
+            <div key={`${r.time}-${i}`}
+              className={`dev-call${r.status === "error" ? " dev-call-err" : ""}${/NSFW|露骨/.test(r.purpose) ? " dev-call-nsfw" : ""}`}
+              title={`${r.baseURL} · ${r.status === "ok" ? `${r.chars}字` : r.error}`}>
+              <span className="dev-call-time">{new Date(r.time).toLocaleTimeString("zh-CN", { hour12: false })}</span>
+              <span className="dev-call-purpose">{r.purpose}</span>
+              <span className="dev-call-target">→ {r.profileName} · {r.model}</span>
+              <span className="dev-call-stat">{r.status === "ok" ? `${r.ms}ms` : "❌"}</span>
+            </div>
+          ))
+        )}
       </div>
 
       {game.ended && (

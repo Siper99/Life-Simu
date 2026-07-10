@@ -16,6 +16,39 @@ export class LlmError extends Error {
   }
 }
 
+// ---------- 路由审计：每次 LLM 请求记一条，开发者面板与控制台共用 ----------
+
+export interface LlmCallRecord {
+  time: number;
+  purpose: string; // 叙事/叙事·NSFW/意图解析/灵感卡/岁月摘要/记忆压缩/墓志铭/连接测试
+  profileName: string;
+  kind: LlmProfile["kind"];
+  model: string;
+  baseURL: string;
+  status: "ok" | "error";
+  ms: number;
+  chars: number; // 成功时的返回字数
+  error?: string;
+}
+
+const CALL_LOG: LlmCallRecord[] = [];
+const CALL_LOG_MAX = 50;
+
+export function llmCallLog(): readonly LlmCallRecord[] {
+  return CALL_LOG;
+}
+
+export function clearLlmCallLog(): void {
+  CALL_LOG.length = 0;
+}
+
+function recordCall(entry: LlmCallRecord): void {
+  CALL_LOG.push(entry);
+  if (CALL_LOG.length > CALL_LOG_MAX) CALL_LOG.splice(0, CALL_LOG.length - CALL_LOG_MAX);
+  const tail = entry.status === "ok" ? `${entry.ms}ms · ${entry.chars}字` : `失败：${entry.error}`;
+  console.info(`[LLM路由] ${entry.purpose} → ${entry.profileName}（${entry.kind} · ${entry.model} @ ${entry.baseURL}）${tail}`);
+}
+
 interface ChatOnce {
   text: string;
   truncated: boolean; // 命中 max_tokens 被截断
@@ -81,18 +114,12 @@ async function requestOnce(
 const CONTINUE_PROMPT =
   "（上一条输出因长度限制被截断。从断点处继续输出剩余内容：直接续写，不要重复已输出的部分，不要任何解释。）";
 
-/**
- * 带自动续写的对话：命中 max_tokens 截断时把已有输出回填为 assistant 消息、
- * 要求模型从断点续写，最多补 2 段后拼接返回——修复「回复写到一半直接断掉」。
- */
-export async function chat(
+async function chatWithContinuation(
   profile: LlmProfile,
   messages: ChatMessage[],
-  opts: { temperature?: number; maxTokens?: number } = {},
+  temperature: number,
+  maxTokens: number,
 ): Promise<string> {
-  const temperature = opts.temperature ?? 0.9;
-  const maxTokens = opts.maxTokens ?? 1600;
-
   let full = "";
   let msgs = messages;
   for (let round = 0; round < 3; round++) {
@@ -108,6 +135,39 @@ export async function chat(
     ];
   }
   return full; // 连续三段仍未写完：返回已拼接内容，调用方的断句兜底会收尾
+}
+
+/**
+ * 带自动续写的对话：命中 max_tokens 截断时把已有输出回填为 assistant 消息、
+ * 要求模型从断点续写，最多补 2 段后拼接返回——修复「回复写到一半直接断掉」。
+ * opts.purpose 用于路由审计：这次请求是干什么的（叙事/出卡/……），会连同实际
+ * 命中的后端一起记进 llmCallLog，方便核对哪些内容发了哪个后端。
+ */
+export async function chat(
+  profile: LlmProfile,
+  messages: ChatMessage[],
+  opts: { temperature?: number; maxTokens?: number; purpose?: string } = {},
+): Promise<string> {
+  const temperature = opts.temperature ?? 0.9;
+  const maxTokens = opts.maxTokens ?? 1600;
+  const purpose = opts.purpose ?? "未标注";
+  const started = Date.now();
+  const base = {
+    time: started,
+    purpose,
+    profileName: profile.name,
+    kind: profile.kind,
+    model: profile.model,
+    baseURL: profile.baseURL,
+  };
+  try {
+    const full = await chatWithContinuation(profile, messages, temperature, maxTokens);
+    recordCall({ ...base, status: "ok", ms: Date.now() - started, chars: full.length });
+    return full;
+  } catch (e) {
+    recordCall({ ...base, status: "error", ms: Date.now() - started, chars: 0, error: String(e).slice(0, 80) });
+    throw e;
+  }
 }
 
 /** 从模型输出里抠出第一个 JSON 值（容忍代码围栏与前后废话） */
@@ -141,7 +201,7 @@ export async function testProfile(profile: LlmProfile): Promise<string> {
   const reply = await chat(
     profile,
     [{ role: "user", content: "回复「连接成功」四个字，不要多说。" }],
-    { maxTokens: 20, temperature: 0 },
+    { maxTokens: 20, temperature: 0, purpose: "连接测试" },
   );
   return reply.trim().slice(0, 50);
 }

@@ -51,7 +51,7 @@ export async function parseIntents(
         { role: "system", content: INTENT_SYSTEM },
         { role: "user", content: intentUserPrompt(state, playerText) },
       ],
-      { temperature: 0.2, maxTokens: 800 },
+      { temperature: 0.2, maxTokens: 800, purpose: nsfwProfile ? "意图解析·露骨模式" : "意图解析" },
     );
     const arr = extractJson<RawIntent[]>(raw);
     if (!Array.isArray(arr) || arr.length === 0) throw new Error("空数组");
@@ -102,7 +102,7 @@ export async function narrateTurn(
         { role: "system", content: narrativeSystem(settings.contentRating, hasNsfwBackend, settings.narrativeStyle) },
         { role: "user", content: narrativeUserPrompt(state, playerText, outcome) },
       ],
-      { temperature: 0.95, maxTokens: 2000 },
+      { temperature: 0.95, maxTokens: 2000, purpose: explicitGenerated ? "叙事·NSFW" : "叙事" },
     );
     const { text, hooks } = splitNarrativeHooks(raw.trim());
     return { text: trimToSentenceEnd(text), hooks, usedLlm: true, nsfw: explicitGenerated };
@@ -130,7 +130,7 @@ export async function proposeChoices(
         { role: "system", content: CHOICE_SYSTEM },
         { role: "user", content: choiceUserPrompt(state, board) },
       ],
-      { temperature: 0.9, maxTokens: 1200 },
+      { temperature: 0.9, maxTokens: 1200, purpose: "灵感卡" },
     );
     return sanitizeLlmChoices(state, extractJson(raw));
   } catch (e) {
@@ -158,7 +158,7 @@ export async function narrateSkip(
         { role: "system", content: SKIP_SYSTEM },
         { role: "user", content: skipUserPrompt(state, spanLabel, notes) },
       ],
-      { temperature: 0.9, maxTokens: 700 },
+      { temperature: 0.9, maxTokens: 700, purpose: "岁月摘要" },
     );
     return { text: trimToSentenceEnd(text.trim()), usedLlm: true };
   } catch (e) {
@@ -178,7 +178,7 @@ export async function summarize(settings: AppSettings, text: string): Promise<st
         { role: "system", content: SUMMARY_SYSTEM },
         { role: "user", content: text },
       ],
-      { temperature: 0.3, maxTokens: 200 },
+      { temperature: 0.3, maxTokens: 200, purpose: "记忆压缩" },
     );
     return out.trim().slice(0, 100);
   } catch {
@@ -200,6 +200,7 @@ export async function writeEpitaph(
     const raw = await chat(profile, [{ role: "user", content: epitaphPrompt(state) }], {
       temperature: 0.9,
       maxTokens: 600,
+      purpose: "墓志铭",
     });
     const j = extractJson<{ summary?: string; epitaph?: string }>(raw);
     return {
