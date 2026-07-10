@@ -1,0 +1,458 @@
+import { Rng } from "./rng";
+import {
+  ActionCategory,
+  ActionIntent,
+  AttrKey,
+  GameState,
+  LifeStage,
+  ageOf,
+  lifeStageOf,
+} from "./types";
+
+export type ChoiceKind = "daily" | "relationship" | "opportunity" | "director" | "recovery" | "llm";
+
+export interface DecisionChoice {
+  id: string;
+  title: string;
+  description: string;
+  kind: ChoiceKind;
+  categoryLabel: string;
+  timeCost: number;
+  energyCost: number;
+  consequences: string[];
+  expiresIn?: number;
+  directorNote?: string;
+  intent: ActionIntent;
+}
+
+export interface WorldPulse {
+  id: string;
+  title: string;
+  summary: string;
+  trend: string;
+  boosted: ActionCategory[];
+  pressured: ActionCategory[];
+}
+
+export interface DirectorRead {
+  intensity: "观察" | "升温" | "高压" | "托底";
+  message: string;
+  injectedCategory?: ActionCategory;
+}
+
+export interface DecisionBoard {
+  timeBudget: number;
+  timeLabel: string;
+  world: WorldPulse;
+  director: DirectorRead;
+  choices: DecisionChoice[];
+}
+
+interface ChoiceDraft {
+  id: string;
+  title: string;
+  description: string;
+  category: ActionCategory;
+  attr: AttrKey;
+  timeCost: number;
+  energyCost: number;
+  risk?: ActionIntent["risk"];
+  consequences: string[];
+}
+
+interface EraRule extends WorldPulse {
+  from: number;
+  to: number;
+}
+
+const CATEGORY_LABELS: Record<ActionCategory, string> = {
+  study: "成长",
+  work: "事业",
+  social: "关系",
+  romance: "情感",
+  exercise: "身体",
+  leisure: "生活",
+  adventure: "冒险",
+  finance: "财富",
+  health: "健康",
+  other: "选择",
+};
+
+const ERAS: EraRule[] = [
+  {
+    id: "opening",
+    from: 0,
+    to: 1994,
+    title: "城市正在加速",
+    summary: "市场机会增多，但信息与资源仍集中在少数人手里。",
+    trend: "流动年代",
+    boosted: ["work", "social"],
+    pressured: ["leisure"],
+  },
+  {
+    id: "internet",
+    from: 1995,
+    to: 2007,
+    title: "互联网把远方拉近",
+    summary: "新行业开始冒头，学习速度和人脉都可能改写起点。",
+    trend: "互联网浪潮",
+    boosted: ["study", "adventure"],
+    pressured: ["finance"],
+  },
+  {
+    id: "winter",
+    from: 2008,
+    to: 2011,
+    title: "经济进入寒潮",
+    summary: "岗位收缩、资产波动，现金和稳定关系显得更重要。",
+    trend: "金融寒潮",
+    boosted: ["study", "health"],
+    pressured: ["work", "finance"],
+  },
+  {
+    id: "mobile",
+    from: 2012,
+    to: 2019,
+    title: "每个人都被连接起来",
+    summary: "移动平台重塑工作、消费与社交，注意力成为新的资源。",
+    trend: "移动红利",
+    boosted: ["social", "work"],
+    pressured: ["leisure"],
+  },
+  {
+    id: "reset",
+    from: 2020,
+    to: 2022,
+    title: "世界按下重置键",
+    summary: "健康与稳定压过扩张，许多旧路径突然失效。",
+    trend: "秩序重排",
+    boosted: ["health", "study"],
+    pressured: ["adventure", "social"],
+  },
+  {
+    id: "ai",
+    from: 2023,
+    to: 2031,
+    title: "AI 正在重写职业地图",
+    summary: "重复劳动迅速贬值，会提问、会协作、能承担结果的人更值钱。",
+    trend: "智能革命",
+    boosted: ["study", "adventure", "finance"],
+    pressured: ["work"],
+  },
+  {
+    id: "robotics",
+    from: 2032,
+    to: 2044,
+    title: "机器人进入日常生活",
+    summary: "生产效率跃升，照护、创造力与真实关系成为稀缺品。",
+    trend: "机器社会",
+    boosted: ["social", "health", "adventure"],
+    pressured: ["work"],
+  },
+  {
+    id: "energy",
+    from: 2045,
+    to: 9999,
+    title: "能源与气候重塑城市",
+    summary: "迁徙和产业重组同时发生，旧资产与新机会一起洗牌。",
+    trend: "能源迁徙",
+    boosted: ["finance", "adventure", "social"],
+    pressured: ["health"],
+  },
+];
+
+const STAGE_POOL: Record<LifeStage, ChoiceDraft[]> = {
+  婴儿: [
+    { id: "imitate", title: "模仿大人的声音", description: "把注意力放在语言和表情上。", category: "study", attr: "intelligence", timeCost: 1, energyCost: 14, consequences: ["智力可能提升", "更容易得到回应"] },
+    { id: "explore", title: "扶着家具探索", description: "离开熟悉的角落，试着控制身体。", category: "exercise", attr: "fitness", timeCost: 1, energyCost: 22, risk: "low", consequences: ["体质可能提升", "有轻微磕碰风险"] },
+    { id: "observe", title: "安静观察这个家", description: "记住声音、气味和每个人的脾气。", category: "other", attr: "eq", timeCost: 1, energyCost: 8, consequences: ["情商可能提升", "了解家人"] },
+    { id: "play", title: "反复摆弄一个玩具", description: "从简单的重复里寻找乐趣。", category: "leisure", attr: "mood", timeCost: 1, energyCost: 6, consequences: ["心境可能提升", "成长较慢"] },
+    { id: "cry", title: "用哭声指挥全家", description: "试探每个人的底线，学会精准表达需求。", category: "social", attr: "eq", timeCost: 1, energyCost: 12, consequences: ["情商可能提升", "家人多少有点累"] },
+    { id: "nap", title: "睡一个漫长的午觉", description: "婴儿的头等大事就是长身体。", category: "health", attr: "health", timeCost: 1, energyCost: -20, consequences: ["恢复精力", "错过一些热闹"] },
+    { id: "taste", title: "把一切塞进嘴里", description: "用最直接的方式认识世界。", category: "adventure", attr: "luck", timeCost: 1, energyCost: 16, risk: "high", consequences: ["认识世界的捷径", "可能吃坏肚子"] },
+  ],
+  童年: [
+    { id: "homework", title: "把功课做扎实", description: "用稳定投入换取更好的学习基础。", category: "study", attr: "intelligence", timeCost: 2, energyCost: 28, consequences: ["学业成长", "心境可能下降"] },
+    { id: "sport", title: "去操场疯跑", description: "和同龄人一起出汗，也一起争输赢。", category: "exercise", attr: "fitness", timeCost: 1, energyCost: 20, consequences: ["体质提升", "可能认识朋友"] },
+    { id: "hobby", title: "认真培养一项爱好", description: "画画、乐器或棋类，总要先从笨拙开始。", category: "study", attr: "intelligence", timeCost: 1, energyCost: 16, consequences: ["获得新技能", "短期回报较少"] },
+    { id: "wander", title: "放学后到处闲逛", description: "不按计划走，看看街角会发生什么。", category: "adventure", attr: "luck", timeCost: 1, energyCost: 14, risk: "high", consequences: ["可能发现新鲜事", "存在意外风险"] },
+    { id: "read", title: "泡在图书角看闲书", description: "课本之外的世界，比想象的大得多。", category: "study", attr: "intelligence", timeCost: 1, energyCost: 14, consequences: ["智力与眼界", "功课让位"] },
+    { id: "chores", title: "帮家里搭把手", description: "扫地、择菜、跑腿，大人会看在眼里。", category: "social", attr: "eq", timeCost: 1, energyCost: 14, consequences: ["家人好感提升", "玩的时间变少"] },
+    { id: "pocketmoney", title: "攒下零花钱", description: "忍住小卖部的诱惑，第一次和欲望谈判。", category: "finance", attr: "intelligence", timeCost: 1, energyCost: 8, consequences: ["第一笔积蓄", "眼馋别人吃零食"] },
+  ],
+  少年: [
+    { id: "exam", title: "为关键考试冲刺", description: "把大块时间押在分数和升学路径上。", category: "study", attr: "intelligence", timeCost: 2, energyCost: 34, consequences: ["学业大幅成长", "关系与心境承压"] },
+    { id: "parttime", title: "周末去打零工", description: "提前接触真实的工作和收入。", category: "work", attr: "eq", timeCost: 2, energyCost: 32, consequences: ["赚取零花钱", "占用学习时间"] },
+    { id: "club", title: "参加社团或比赛", description: "让兴趣第一次接受公开检验。", category: "adventure", attr: "charm", timeCost: 1, energyCost: 20, risk: "high", consequences: ["人脉与技能机会", "失败会受挫"] },
+    { id: "gaming", title: "和朋友开黑到深夜", description: "快乐很直接，代价也会在第二天出现。", category: "leisure", attr: "mood", timeCost: 1, energyCost: 10, consequences: ["心境提升", "学习进度放缓"] },
+    { id: "crush", title: "接近让你心动的人", description: "递一瓶水、借一本书，先让对方记住你。", category: "romance", attr: "charm", timeCost: 1, energyCost: 18, risk: "high", consequences: ["青涩的悸动", "可能被当众婉拒"] },
+    { id: "extraread", title: "读课外书开阔眼界", description: "分数管三年，眼界管一生。", category: "study", attr: "intelligence", timeCost: 1, energyCost: 16, consequences: ["视野与谈资", "对考试没直接帮助"] },
+    { id: "train", title: "坚持早起锻炼", description: "操场上的圈数不会说谎。", category: "exercise", attr: "fitness", timeCost: 1, energyCost: 24, consequences: ["体质稳步提升", "晚自习犯困"] },
+  ],
+  青年: [
+    { id: "career", title: "把时间押在事业上", description: "争取机会、作品或一次更好的面试。", category: "work", attr: "eq", timeCost: 2, energyCost: 36, consequences: ["收入与职业成长", "精力消耗较大"] },
+    { id: "upskill", title: "下班后学习新技能", description: "牺牲眼前的轻松，为下一次跳跃做准备。", category: "study", attr: "intelligence", timeCost: 2, energyCost: 30, consequences: ["获得技能经验", "短期没有收入"] },
+    { id: "sideproject", title: "启动一个小项目", description: "先做出能被人使用的东西，再谈梦想。", category: "adventure", attr: "intelligence", timeCost: 2, energyCost: 38, risk: "high", consequences: ["可能打开新路径", "失败成本较高"] },
+    { id: "invest", title: "研究并投入一笔钱", description: "让判断接受市场检验，而不是只看热闹。", category: "finance", attr: "luck", timeCost: 1, energyCost: 16, risk: "high", consequences: ["财富可能增长", "也可能亏损"] },
+    { id: "network", title: "经营一场饭局", description: "有些机会只在酒过三巡后出现。", category: "social", attr: "eq", timeCost: 1, energyCost: 20, consequences: ["人脉扩展", "身体和钱包都出血"] },
+    { id: "love", title: "认真经营一段感情", description: "把对方放进日程表，而不是空隙里。", category: "romance", attr: "charm", timeCost: 1, energyCost: 16, consequences: ["亲密关系推进", "自由时间变少"] },
+    { id: "gym", title: "把健身变成习惯", description: "身体是唯一跟你走完全程的东西。", category: "exercise", attr: "fitness", timeCost: 1, energyCost: 26, consequences: ["体质与状态", "肌肉会先抗议"] },
+    { id: "moonlight", title: "接一单私活", description: "用睡眠换现金流，短期见效最快的路。", category: "work", attr: "intelligence", timeCost: 1, energyCost: 26, consequences: ["额外收入", "透支精力"] },
+  ],
+  中年: [
+    { id: "promotion", title: "争取更大的责任", description: "主动接下棘手项目，换取事业上升窗口。", category: "work", attr: "eq", timeCost: 2, energyCost: 38, risk: "high", consequences: ["事业与收入机会", "健康和关系承压"] },
+    { id: "sidebusiness", title: "验证一门副业", description: "用现有经验寻找第二条收入曲线。", category: "finance", attr: "intelligence", timeCost: 2, energyCost: 32, risk: "high", consequences: ["财富机会", "可能损失本金"] },
+    { id: "checkup", title: "认真处理身体信号", description: "预约体检，调整作息，不再假装没事。", category: "health", attr: "health", timeCost: 1, energyCost: -16, consequences: ["恢复健康与精力", "花费金钱"] },
+    { id: "oldhobby", title: "捡回搁置多年的爱好", description: "给不产生绩效的自己留一块地方。", category: "leisure", attr: "mood", timeCost: 1, energyCost: -10, consequences: ["恢复心境与精力", "事业进度放缓"] },
+    { id: "family", title: "认真陪一次家人", description: "关掉手机，把整段时间还给最近的人。", category: "social", attr: "eq", timeCost: 1, energyCost: 12, consequences: ["关系修复", "工作消息堆积"] },
+    { id: "mentor", title: "带一带年轻人", description: "把经验变成别人的起点，也变成你的口碑。", category: "social", attr: "eq", timeCost: 1, energyCost: 16, consequences: ["人脉与声望", "考验耐心"] },
+    { id: "assets", title: "重新梳理家庭资产", description: "保险、负债、闲钱，一笔一笔过。", category: "finance", attr: "intelligence", timeCost: 1, energyCost: 18, consequences: ["财务更稳健", "可能发现窟窿"] },
+  ],
+  老年: [
+    { id: "exercise", title: "保持规律运动", description: "不追求极限，只维持身体仍能回应你。", category: "health", attr: "health", timeCost: 1, energyCost: 8, consequences: ["健康可能提升", "降低衰退速度"] },
+    { id: "memoir", title: "整理一生的经验", description: "把做对和做错的事都写下来。", category: "study", attr: "intelligence", timeCost: 2, energyCost: 20, consequences: ["留下传承", "梳理人生"] },
+    { id: "travel", title: "去一个没去过的地方", description: "趁身体还允许，主动制造新的记忆。", category: "adventure", attr: "health", timeCost: 2, energyCost: 30, risk: "high", consequences: ["心境大幅改善机会", "健康与金钱风险"] },
+    { id: "tea", title: "约老友喝茶", description: "有些关系不联系，就真的会消失。", category: "social", attr: "eq", timeCost: 1, energyCost: 8, consequences: ["关系与心境提升", "没有物质回报"] },
+    { id: "garden", title: "侍弄一个小园子", description: "浇水、松土、等一茬时令菜慢慢长。", category: "leisure", attr: "mood", timeCost: 1, energyCost: 6, consequences: ["心境平和", "收成看天意"] },
+    { id: "volunteer", title: "去社区做志愿者", description: "被人需要，是退休后最稀缺的感觉。", category: "social", attr: "eq", timeCost: 1, energyCost: 14, consequences: ["关系与被需要感", "消耗体力"] },
+  ],
+};
+
+export function getWorldPulse(state: GameState): WorldPulse {
+  const era = ERAS.find((item) => state.world.year >= item.from && state.world.year <= item.to) ?? ERAS[ERAS.length - 1];
+  return {
+    id: era.id,
+    title: era.title,
+    summary: era.summary,
+    trend: era.trend,
+    boosted: era.boosted,
+    pressured: era.pressured,
+  };
+}
+
+export function worldModifierFor(state: GameState, category: ActionCategory): number {
+  const pulse = getWorldPulse(state);
+  if (pulse.boosted.includes(category)) return 1.2;
+  if (pulse.pressured.includes(category)) return 0.85;
+  return 1;
+}
+
+function hoursPerBlock(state: GameState): number {
+  if (state.granularity === "week") return 14;
+  if (state.granularity === "month") return 56;
+  return 420;
+}
+
+function toChoice(state: GameState, draft: ChoiceDraft, kind: ChoiceKind = "daily"): DecisionChoice {
+  return {
+    id: `${kind}-${draft.id}`,
+    title: draft.title,
+    description: draft.description,
+    kind,
+    categoryLabel: CATEGORY_LABELS[draft.category],
+    timeCost: draft.timeCost,
+    energyCost: draft.energyCost,
+    consequences: draft.consequences,
+    intent: {
+      id: `choice-${draft.id}`,
+      summary: draft.title,
+      category: draft.category,
+      hours: hoursPerBlock(state) * draft.timeCost,
+      energyCost: draft.energyCost,
+      risk: draft.risk ?? "low",
+      attr: draft.attr,
+      nsfw: false,
+    },
+  };
+}
+
+function relationshipChoice(state: GameState): DecisionChoice {
+  const npc = state.character.npcs
+    .filter((item) => item.alive)
+    .sort((a, b) => b.affinity - a.affinity)[0];
+  const target = npc?.name ?? "身边的人";
+  const relation = npc?.relation ?? "关系";
+  const category: ActionCategory = ageOf(state) >= 16 && state.character.identity.maritalStatus === "恋爱中" ? "romance" : "social";
+  const choice = toChoice(state, {
+    id: `with-${npc?.id ?? "someone"}`,
+    title: `把时间留给${target}`,
+    description: `${relation}不会永远停在原地。见面、倾听，也让对方的人生继续发生。`,
+    category,
+    attr: category === "romance" ? "charm" : "eq",
+    timeCost: 1,
+    energyCost: 10,
+    consequences: [`${target}好感可能提升`, "其他进度放缓"],
+  }, "relationship");
+  choice.intent.target = target;
+  return choice;
+}
+
+function recoveryChoice(state: GameState): DecisionChoice {
+  return toChoice(state, {
+    id: "recovery",
+    title: "给自己留出空白",
+    description: "早点睡、散步、发呆。没有产出，但人不是永动机。",
+    category: state.character.attrs.health < 45 ? "health" : "leisure",
+    attr: state.character.attrs.health < 45 ? "health" : "mood",
+    timeCost: 1,
+    energyCost: -24,
+    consequences: ["恢复精力", "心境或健康改善"],
+  }, "recovery");
+}
+
+function opportunityChoice(state: GameState, world: WorldPulse): DecisionChoice | null {
+  const windowStart = Math.floor(state.turn / 4) * 4;
+  const opportunityId = `opportunity-${world.id}-${windowStart}`;
+  const claimed = state.decisionHistory?.some((entry) => entry.choiceIds.includes(opportunityId));
+  if (claimed) return null;
+
+  const stage = lifeStageOf(ageOf(state));
+  const config: Record<LifeStage, { title: string; description: string; category: ActionCategory; attr: AttrKey }> = {
+    婴儿: { title: "家里来了一位特别的客人", description: "对方愿意花时间陪你，也可能影响父母之后的选择。", category: "social", attr: "luck" },
+    童年: { title: "免费的体验名额只剩一个", description: `一项与「${world.trend}」有关的活动今天截止报名。`, category: "study", attr: "intelligence" },
+    少年: { title: "关键比赛开放报名", description: `这可能成为你进入「${world.trend}」的一张早期门票。`, category: "adventure", attr: "intelligence" },
+    青年: { title: `${world.trend}项目正在招募`, description: "收入和稳定性都不确定，但窗口关闭后不会等你。", category: "adventure", attr: "intelligence" },
+    中年: { title: "一张合伙人席位", description: `旧同事邀请你进入「${world.trend}」，需要拿现金和声誉一起下注。`, category: "finance", attr: "eq" },
+    老年: { title: "城市传承计划开放", description: "有人愿意认真听你的经验，但申请只开放很短时间。", category: "social", attr: "eq" },
+  };
+  const item = config[stage];
+  const choice = toChoice(state, {
+    id: `opportunity-${world.id}-${windowStart}`,
+    title: item.title,
+    description: item.description,
+    category: item.category,
+    attr: item.attr,
+    timeCost: 2,
+    energyCost: 34,
+    risk: "high",
+    consequences: ["可能改变人生路径", "高风险且不可重来"],
+  }, "opportunity");
+  choice.id = opportunityId;
+  choice.expiresIn = 4 - (state.turn - windowStart);
+  return choice;
+}
+
+export function readDirector(state: GameState): DirectorRead {
+  if (state.character.attrs.health < 35 || state.character.energy < 22) {
+    return { intensity: "托底", message: "你已经接近透支，系统正在增加恢复选项。", injectedCategory: "health" };
+  }
+  const recent = (state.decisionHistory ?? []).slice(-4).flatMap((entry) => entry.categories);
+  if (recent.length === 0) {
+    return { intensity: "观察", message: "导演正在观察你把时间投向哪里。" };
+  }
+  const counts = new Map<ActionCategory, number>();
+  for (const category of recent) counts.set(category, (counts.get(category) ?? 0) + 1);
+  const [dominant, count] = [...counts.entries()].sort((a, b) => b[1] - a[1])[0];
+  if (count / recent.length < 0.6) {
+    return { intensity: "升温", message: "你的生活暂时保持平衡，世界会逐渐提高赌注。" };
+  }
+  if (["study", "work", "finance"].includes(dominant)) {
+    return { intensity: "高压", message: "你最近只顾成长和回报，关系事件正在靠近。", injectedCategory: "social" };
+  }
+  if (["social", "romance", "leisure"].includes(dominant)) {
+    return { intensity: "升温", message: "你把很多时间给了感受，现实目标开始追上来。", injectedCategory: ageOf(state) < 18 ? "study" : "work" };
+  }
+  return { intensity: "升温", message: "你持续强化同一种生活，导演会制造新的取舍。", injectedCategory: "social" };
+}
+
+function directorChoice(state: GameState, director: DirectorRead): DecisionChoice | null {
+  if (!director.injectedCategory || director.intensity === "托底") return null;
+  const isRelationship = director.injectedCategory === "social";
+  const draft: ChoiceDraft = isRelationship
+    ? { id: "director-relationship", title: "回应一条被忽略的消息", description: "对方已经主动了两次。再不回应，这段关系会自己往前走。", category: "social", attr: "eq", timeCost: 1, energyCost: 12, consequences: ["修复一段关系", "打断当前节奏"] }
+    : { id: "director-reality", title: ageOf(state) < 18 ? "补上落下的进度" : "处理积压的现实问题", description: "它不刺激，却会在继续拖延后变成真正的麻烦。", category: director.injectedCategory, attr: ageOf(state) < 18 ? "intelligence" : "eq", timeCost: 1, energyCost: 18, consequences: ["降低未来压力", "占用自由时间"] };
+  const choice = toChoice(state, draft, "director");
+  choice.directorNote = director.message;
+  return choice;
+}
+
+/**
+ * LLM 补充卡的净化入口：LLM 只产出文本与意图，数值真值由这里裁剪落地。
+ * 任何字段缺失/越界都被拉回合法范围；解析不出标题的条目直接丢弃。
+ */
+export function sanitizeLlmChoices(state: GameState, raw: unknown): DecisionChoice[] {
+  if (!Array.isArray(raw)) return [];
+  const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
+  const validCategory = (c: unknown): c is ActionCategory =>
+    typeof c === "string" && c in CATEGORY_LABELS;
+  const VALID_ATTRS = new Set(["health", "fitness", "intelligence", "eq", "charm", "mood", "luck"]);
+  const out: DecisionChoice[] = [];
+  let riskUsed = false;
+
+  for (const item of raw.slice(0, 3)) {
+    if (!item || typeof item !== "object") continue;
+    const r = item as Record<string, unknown>;
+    const title = String(r.title ?? "").trim().slice(0, 16);
+    if (!title) continue;
+    const category: ActionCategory = validCategory(r.category) ? r.category : "other";
+    const attr = VALID_ATTRS.has(String(r.attr)) ? (r.attr as AttrKey) : "mood";
+    const timeCost = Number(r.timeCost) === 2 ? 2 : 1;
+    const energyCost = clamp(Math.round(Number(r.energyCost) || 15), -25, 40);
+    const risk: ActionIntent["risk"] = r.risk === "high" && !riskUsed ? "high" : "low";
+    if (risk === "high") riskUsed = true; // 每批至多一张高危卡
+    const consequences = Array.isArray(r.consequences)
+      ? r.consequences.slice(0, 3).map((c) => String(c).slice(0, 14)).filter(Boolean)
+      : [];
+    const id = `llm-${state.turn}-${out.length}`;
+    out.push({
+      id,
+      title,
+      description: String(r.description ?? "").trim().slice(0, 60),
+      kind: "llm",
+      categoryLabel: CATEGORY_LABELS[category],
+      timeCost,
+      energyCost,
+      consequences,
+      intent: {
+        id,
+        summary: title,
+        category,
+        hours: hoursPerBlock(state) * timeCost,
+        energyCost,
+        risk,
+        attr,
+        nsfw: false,
+        target: r.target ? String(r.target).slice(0, 20) : undefined,
+      },
+    });
+  }
+  return out;
+}
+
+export function getDecisionBoard(state: GameState, extraChoices: DecisionChoice[] = []): DecisionBoard {
+  const world = getWorldPulse(state);
+  const director = readDirector(state);
+  const stage = lifeStageOf(ageOf(state));
+  const rng = Rng.fromState(((state.seed ^ Math.imul(state.turn + 1, 2654435761)) >>> 0) || 1);
+  const daily = rng.sample(STAGE_POOL[stage], Math.min(4, STAGE_POOL[stage].length)).map((item) => toChoice(state, item));
+  const opportunity = opportunityChoice(state, world);
+  const injected = directorChoice(state, director);
+  const choices = [
+    ...(injected ? [injected] : []),
+    ...(opportunity ? [opportunity] : []),
+    ...extraChoices, // LLM 补充卡紧随机会卡，位置醒目
+    ...daily,
+    relationshipChoice(state),
+    recoveryChoice(state),
+  ];
+  const seen = new Set<string>();
+  const deduped = choices.filter((c) => (seen.has(c.id) ? false : (seen.add(c.id), true)));
+  return {
+    timeBudget: 3,
+    timeLabel: state.granularity === "week" ? "本周时间" : state.granularity === "month" ? "本月重心" : "这一年",
+    world,
+    director,
+    choices: deduped.slice(0, 10),
+  };
+}
+
+export function selectionError(state: GameState, board: DecisionBoard, ids: string[]): string | null {
+  if (ids.length === 0) return "至少选择一项安排";
+  const selected = ids.map((id) => board.choices.find((choice) => choice.id === id)).filter((choice): choice is DecisionChoice => Boolean(choice));
+  if (selected.length !== ids.length) return "选择已经过期，请重新安排";
+  const time = selected.reduce((sum, choice) => sum + choice.timeCost, 0);
+  if (time > board.timeBudget) return `时间不够：需要 ${time} 格，只有 ${board.timeBudget} 格`;
+  const energy = selected.reduce((sum, choice) => sum + Math.max(0, choice.energyCost), 0);
+  if (energy > state.character.energy) return `精力不够：需要 ${energy}，当前只有 ${state.character.energy}`;
+  return null;
+}

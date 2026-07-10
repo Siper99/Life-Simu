@@ -4,15 +4,52 @@ import { create } from "zustand";
 import { GenderPref, applyTalent, newGameState, reassignGender } from "../engine/genesis";
 import { Rng } from "../engine/rng";
 import { appendWeeklyNote } from "../engine/memory";
+import { DecisionBoard, DecisionChoice, getDecisionBoard, selectionError } from "../engine/decisions";
 import { tierFromOffset } from "../engine/resolver";
-import { beginTurn, fastForward, finalizeTurn } from "../engine/turn";
-import { GameState, Talent, Tier, TIER_LABELS, formatDate } from "../engine/types";
-import { narrateTurn, parseIntents, writeEpitaph } from "../llm/orchestrator";
-import { AppSettings, DEFAULT_SETTINGS } from "../llm/types";
+import { beginTurn, fastForward, finalizeTurn, TurnOutcome } from "../engine/turn";
+import {
+  ATTR_LABELS,
+  AttrKey,
+  GameState,
+  Talent,
+  Tier,
+  TIER_LABELS,
+  formatDate,
+} from "../engine/types";
+import { narrateTurn, parseIntents, proposeChoices, writeEpitaph } from "../llm/orchestrator";
+import { AppSettings, DEFAULT_SETTINGS, profileForRole } from "../llm/types";
 import * as persist from "./persist";
 
 export type Screen = "menu" | "genesis" | "game" | "settings";
 export type TurnPhase = "idle" | "parsing" | "swinging" | "narrating";
+
+/** 结算浮字：一条数值变化（绿升红降，技能升级金色） */
+export interface FloatChip {
+  text: string;
+  kind: "up" | "down" | "gold";
+}
+
+/** 一个回合结算产生的浮字批次；seq 递增用于触发重播 */
+export interface FloatBatch {
+  seq: number;
+  chips: FloatChip[];
+  attrDeltas: Partial<Record<AttrKey, number>>; // 属性行闪烁用
+}
+
+/** LLM 补充行动卡：按局+回合缓存，过期即弃 */
+export interface LlmChoiceBatch {
+  gameId: string;
+  turn: number;
+  choices: DecisionChoice[];
+  loading: boolean;
+}
+
+/** 固定卡池 + 本回合有效的 LLM 补充卡 → 完整决策盘（UI 与提交校验共用同一份） */
+export function mergedBoard(game: GameState, llm: LlmChoiceBatch | null): DecisionBoard {
+  const extras =
+    llm && llm.gameId === game.id && llm.turn === game.turn && !llm.loading ? llm.choices : [];
+  return getDecisionBoard(game, extras);
+}
 
 interface GenesisDraft {
   state: GameState;
@@ -29,6 +66,8 @@ interface Store {
   saves: persist.SaveMeta[];
   phase: TurnPhase;
   currentCheckIndex: number; // pending.checks 中当前待处理的
+  floats: FloatBatch | null; // 最近一次结算的浮字
+  llmChoices: LlmChoiceBatch | null; // 本回合的 LLM 补充行动卡
   lastError: string | null;
   genderPref: GenderPref; // 开局性别偏好：随机/男/女
 
@@ -45,6 +84,7 @@ interface Store {
   deleteSave: (id: string) => Promise<void>;
 
   submitTurn: (text: string) => Promise<void>;
+  submitChoices: (choiceIds: string[]) => Promise<void>;
   reportSwing: (offset: number) => Promise<void>;
   doFastForward: (turns: number) => Promise<void>;
 }
@@ -62,6 +102,8 @@ export const useStore = create<Store>((set, get) => ({
   saves: [],
   phase: "idle",
   currentCheckIndex: 0,
+  floats: null,
+  llmChoices: null,
   lastError: null,
   genderPref: "random",
 
@@ -120,11 +162,12 @@ export const useStore = create<Store>((set, get) => ({
       date: `${g.state.character.birthYear}年`,
       kind: "system",
       text:
-        "【指引】天命已定——出身、家庭、环境都无法重来。往后怎么活，由你决定：" +
-        "在下方输入任何你想做的事（一次可以做几件），或点击建议直接行动；" +
-        "什么都不想管的时候，就点「随波逐流」，让人生沿着出身的轨迹自己滑行。",
+        "【指引】天命已定——出身、家庭、时代都无法重来。每回合你有三格时间，" +
+        "先从系统给出的现实选项里安排生活；限时机会错过就不会回来。" +
+        "如果这些选项都不够，你仍然可以展开「自定义行动」。",
     });
-    set({ game: touch(g.state), genesis: null, screen: "game", phase: "idle" });
+    set({ game: touch(g.state), genesis: null, screen: "game", phase: "idle", floats: null });
+    refreshLlmChoices(set, get);
     await persist.saveGame(g.state);
     await get().refreshSaves();
   },
@@ -134,7 +177,8 @@ export const useStore = create<Store>((set, get) => ({
       const game = await persist.loadGame(id);
       // 读档时丢弃未完成的回合中间态，回到输入阶段
       game.pending = null;
-      set({ game, screen: "game", phase: "idle", lastError: null });
+      set({ game, screen: "game", phase: "idle", floats: null, lastError: null });
+      refreshLlmChoices(set, get);
     } catch (e) {
       set({ lastError: `读档失败：${e}` });
     }
@@ -171,6 +215,46 @@ export const useStore = create<Store>((set, get) => ({
     }
   },
 
+
+  submitChoices: async (choiceIds) => {
+    const { game, phase, llmChoices } = get();
+    if (!game || game.ended || phase !== "idle") return;
+    // 必须与 UI 使用同一份合并看板，否则选中的 LLM 卡会被误判过期
+    const board = mergedBoard(game, llmChoices);
+    const error = selectionError(game, board, choiceIds);
+    if (error) {
+      set({ lastError: error });
+      return;
+    }
+    const selected = choiceIds.map((id) => board.choices.find((choice) => choice.id === id)!);
+    const text = selected.map((choice) => choice.title).join("；");
+    const intents = selected.map((choice, index) => ({
+      ...choice.intent,
+      id: `choice-${game.turn}-${index}`,
+    }));
+
+    set({ phase: "parsing", lastError: null });
+    game.log.push({ turn: game.turn, date: formatDate(game), kind: "player", text });
+    game.decisionHistory.push({
+      turn: game.turn,
+      choiceIds: selected.map((choice) => choice.id),
+      categories: intents.map((intent) => intent.category),
+    });
+    if (game.decisionHistory.length > 24) game.decisionHistory = game.decisionHistory.slice(-24);
+
+    try {
+      const pending = beginTurn(game, text, intents);
+      game.pending = pending;
+      set({ game: touch(game) });
+      if (pending.checks.length > 0) {
+        set({ phase: "swinging", currentCheckIndex: 0 });
+      } else {
+        await finishTurn(set, get);
+      }
+    } catch (e) {
+      set({ phase: "idle", lastError: `回合处理失败：${e}` });
+    }
+  },
   reportSwing: async (offset) => {
     const { game, currentCheckIndex } = get();
     const pending = game?.pending;
@@ -207,6 +291,7 @@ export const useStore = create<Store>((set, get) => ({
       await handleDeath(set, get);
     }
     set({ game: touch(game) });
+    refreshLlmChoices(set, get);
     await persist.saveGame(game);
   },
 }));
@@ -214,13 +299,41 @@ export const useStore = create<Store>((set, get) => ({
 type Set = (partial: Partial<Store>) => void;
 type Get = () => Store;
 
+/**
+ * 请求 LLM 为当前回合补充行动卡（异步，不阻塞决策盘展示）。
+ * 结果落地前若回合/存档已变化则丢弃，避免旧卡串场。
+ */
+function refreshLlmChoices(set: Set, get: Get): void {
+  const { game, settings } = get();
+  if (!game || game.ended) {
+    set({ llmChoices: null });
+    return;
+  }
+  if (!profileForRole(settings, "narrative")) {
+    set({ llmChoices: null }); // 未配置 LLM：固定卡池全量兜底
+    return;
+  }
+  const gameId = game.id;
+  const turn = game.turn;
+  set({ llmChoices: { gameId, turn, choices: [], loading: true } });
+  void proposeChoices(settings, game, getDecisionBoard(game)).then((choices) => {
+    const cur = get();
+    if (cur.game?.id === gameId && cur.game.turn === turn) {
+      set({ llmChoices: { gameId, turn, choices, loading: false } });
+    }
+  });
+}
+
 async function finishTurn(set: Set, get: Get): Promise<void> {
   const { game, settings } = get();
   const pending = game?.pending;
   if (!game || !pending) return;
   set({ phase: "narrating" });
 
+  // 技能等级快照：finalize 后对比检出升级，浮金色字
+  const lvBefore = new Map(game.character.skills.map((s) => [s.id, s.level]));
   const outcome = finalizeTurn(game, pending);
+  const { chips, attrDeltas } = collectFloatChips(game, outcome, lvBefore);
   const { text } = await narrateTurn(settings, game, pending.playerText, outcome);
 
   game.log.push({ turn: game.turn, date: formatDate(game), kind: "narrative", text });
@@ -231,9 +344,64 @@ async function finishTurn(set: Set, get: Get): Promise<void> {
     await handleDeath(set, get);
   }
 
-  set({ game: touch(game), phase: "idle" });
+  set({
+    game: touch(game),
+    phase: "idle",
+    floats:
+      chips.length > 0
+        ? { seq: (get().floats?.seq ?? 0) + 1, chips, attrDeltas }
+        : get().floats,
+  });
+  refreshLlmChoices(set, get);
   await persist.saveGame(game);
   await get().refreshSaves();
+}
+
+/** 把本回合行动/事件的数值变化摊平、合并同类，转成浮字队列 */
+function collectFloatChips(
+  game: GameState,
+  outcome: TurnOutcome,
+  lvBefore: Map<string, number>,
+): { chips: FloatChip[]; attrDeltas: Partial<Record<AttrKey, number>> } {
+  const attrs = new Map<AttrKey, number>();
+  const affinity = new Map<string, number>();
+  let money = 0;
+  let connections = 0;
+
+  const deltas = outcome.actions.map((a) => a.deltas);
+  let energy = 0;
+  if (outcome.event) deltas.push(outcome.event.deltas);
+  for (const d of deltas) {
+    for (const [k, v] of Object.entries(d.attrs)) {
+      if (v) attrs.set(k as AttrKey, (attrs.get(k as AttrKey) ?? 0) + v);
+    }
+    money += d.money;
+    connections += d.connections;
+    energy += d.energy;
+    for (const a of d.affinity) affinity.set(a.npcName, (affinity.get(a.npcName) ?? 0) + a.delta);
+  }
+
+  const sign = (v: number) => (v > 0 ? `+${v}` : `${v}`);
+  const chips: FloatChip[] = [];
+  const attrDeltas: Partial<Record<AttrKey, number>> = {};
+  for (const [k, v] of attrs) {
+    if (v === 0) continue;
+    attrDeltas[k] = v;
+    chips.push({ text: `${sign(v)} ${ATTR_LABELS[k]}`, kind: v > 0 ? "up" : "down" });
+  }
+  if (money !== 0) chips.push({ text: `${sign(money)} 金钱`, kind: money > 0 ? "up" : "down" });
+  if (connections !== 0)
+    chips.push({ text: `${sign(connections)} 人脉`, kind: connections > 0 ? "up" : "down" });
+  if (energy !== 0) chips.push({ text: `${sign(energy)} 精力`, kind: energy > 0 ? "up" : "down" });
+  for (const [name, v] of affinity) {
+    if (v !== 0) chips.push({ text: `${name} 好感${sign(v)}`, kind: v > 0 ? "up" : "down" });
+  }
+  for (const s of game.character.skills) {
+    if (s.level > (lvBefore.get(s.id) ?? 0)) {
+      chips.push({ text: `🎉 ${s.name} Lv${s.level}`, kind: "gold" });
+    }
+  }
+  return { chips: chips.slice(0, 8), attrDeltas }; // 截断防刷屏
 }
 
 async function handleDeath(set: Set, get: Get): Promise<void> {

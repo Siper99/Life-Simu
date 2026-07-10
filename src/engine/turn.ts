@@ -1,11 +1,13 @@
 // 回合编排（纯引擎侧，不含 LLM 调用）：开始回合 → 收集摆动条结果 → 终局结算 → 时间推进。
 
 import { Rng } from "./rng";
+import { getWorldPulse } from "./decisions";
 import { pickEvent, WEEKLY_EVENT_CHANCE } from "./events";
 import {
   applyDeltas,
   autoTier,
   buildSwingCheck,
+  fumbleSaveChance,
   resolveAction,
   resolveEvent,
 } from "./resolver";
@@ -20,7 +22,6 @@ import {
   ageOf,
   clamp,
   granularityOf,
-  lifeStageOf,
 } from "./types";
 
 /** 行动类别基础难度 */
@@ -83,24 +84,35 @@ export function finalizeTurn(state: GameState, pending: PendingTurn): TurnOutcom
   const tierOf = (checkId: string): Tier | undefined =>
     pending.checkResults.find((r) => r.checkId === checkId)?.tier;
 
+  // 转针大失败的运气豁免：降档为普通失败，叙事里体现「有惊无险」
+  const trySave = (tier: Tier | undefined): { tier: Tier | undefined; saved: boolean } => {
+    if (tier === "fumble" && rng.chance(fumbleSaveChance(state.character.attrs.luck))) {
+      return { tier: "fail", saved: true };
+    }
+    return { tier, saved: false };
+  };
+
   const actions: ActionResolution[] = [];
   for (const intent of pending.intents) {
-    let tier = tierOf(intent.id);
+    let { tier, saved } = trySave(tierOf(intent.id));
     if (!tier) {
       const difficulty = BASE_DIFFICULTY[intent.category] ?? 35;
       tier = autoTier(rng, difficulty, state.character.attrs[intent.attr]);
     }
     const res = resolveAction(rng, state, intent, tier);
+    if (saved) res.mechanical += "（运气救场：大失败降为失败，有惊无险）";
     applyDeltas(state, res.deltas);
     actions.push(res);
   }
 
   let event: EventResolution | null = null;
   if (pending.event) {
+    const { tier: savedTier, saved } = trySave(tierOf(`event:${pending.event.id}`));
     const tier =
-      tierOf(`event:${pending.event.id}`) ??
+      savedTier ??
       autoTier(rng, pending.event.difficulty, state.character.attrs[pending.event.attr ?? "luck"]);
     event = resolveEvent(rng, state, pending.event, tier);
+    if (saved) event.mechanical += "（运气救场：大失败降为失败，有惊无险）";
     applyDeltas(state, event.deltas);
   }
 
@@ -128,6 +140,9 @@ function advanceTime(rng: Rng, state: GameState): string[] {
   }
 
   const age = ageOf(state);
+  const pulse = getWorldPulse(state);
+  state.world.macroNotes = [`${pulse.title}：${pulse.summary}`, `当前趋势：${pulse.trend}`];
+
 
   // 收入与开销（仅周/月粒度的成年生活需要精算，童年由家庭承担）
   if (c.identity.job) {
@@ -154,6 +169,14 @@ function advanceTime(rng: Rng, state: GameState): string[] {
       c.attrs.health = clamp(c.attrs.health - 1, 0, 100);
     }
   }
+  // 精力跨回合保留，但时间流逝会带来自然恢复；周粒度下过度安排会累积疲劳。
+  const recoveryBase = state.granularity === "week" ? 20 : state.granularity === "month" ? 45 : 100;
+  const recovery = Math.round(recoveryBase + c.attrs.health * 0.08 + c.attrs.mood * 0.04);
+  const energyBeforeRecovery = c.energy;
+  c.energy = clamp(c.energy + recovery, 0, 100);
+  if (c.energy > energyBeforeRecovery) notes.push(`休息恢复精力 +${c.energy - energyBeforeRecovery}`);
+
+
 
   // 粒度切换（童年快进 → 少年周粒度）
   const g = granularityOf(age);
@@ -226,15 +249,3 @@ export function fastForward(state: GameState, turns: number): string[] {
   return notes;
 }
 
-/** 当前人生阶段的默认行动提示（给输入框 placeholder） */
-export function actionHint(state: GameState): string {
-  const stage = lifeStageOf(ageOf(state));
-  switch (stage) {
-    case "婴儿": return "你还是个孩子，试试：哭闹引起注意 / 观察世界 / 努力学说话……";
-    case "童年": return "试试：认真读书，放学和小伙伴玩 / 缠着爸妈买玩具 / 偷偷练习画画……";
-    case "少年": return "试试：拼命刷题准备中考，周末打篮球 / 跟喜欢的同学表白 / 学吉他……";
-    case "青年": return "试试：投简历找工作，晚上健身 / 约她看电影 / 拿积蓄投资朋友的项目……";
-    case "中年": return "试试：争取升职，多陪陪家人 / 体检 / 开始筹划自己的生意……";
-    case "老年": return "试试：晨练太极，含饴弄孙 / 写回忆录 / 来一场说走就走的旅行……";
-  }
-}

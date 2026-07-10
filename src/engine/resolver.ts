@@ -18,8 +18,17 @@ import {
   emptyDeltas,
 } from "./types";
 import { Rng } from "./rng";
+import { worldModifierFor } from "./decisions";
 
 // ---------- 摆动条参数 ----------
+
+/**
+ * 全局手感旋钮：时间窗 ∝ 区宽 ÷ 摆速，0.8 ≈ 判定比基准值容易 20%。
+ * 减负平摊到两个维度（各 √EASE）：摆速 −11%、区宽 +12%，视觉上都不突兀。
+ */
+const SWING_EASE = 0.8;
+const SPEED_SCALE = Math.sqrt(SWING_EASE);
+const ZONE_SCALE = 1 / SPEED_SCALE;
 
 /**
  * 摆速 ∝ 收益（好爆率跳得快），最佳区宽度 ∝ 1/难度。
@@ -33,16 +42,28 @@ export function buildSwingCheck(
   attrValue: number,
 ): SwingCheck {
   const attrBonus = clamp((attrValue - 50) / 50, -0.5, 1); // -0.5 ~ 1
-  const speedHz = clamp((0.55 + reward * 0.38) * (1 - 0.3 * Math.max(0, attrBonus)), 0.4, 2.6);
-  const bestBase = clamp(0.16 - difficulty * 0.0013, 0.028, 0.16);
-  const best = clamp(bestBase * (1 + 0.4 * attrBonus), 0.02, 0.2);
+  const speedHz = clamp(
+    (0.55 + reward * 0.38) * SPEED_SCALE * (1 - 0.3 * Math.max(0, attrBonus)),
+    0.4,
+    2.35,
+  );
+  const bestBase = clamp((0.16 - difficulty * 0.0013) * ZONE_SCALE, 0.031, 0.18);
+  const best = clamp(bestBase * (1 + 0.4 * attrBonus), 0.022, 0.22);
   const zones: ZoneWidths = {
     best,
-    success: clamp(best + 0.14 - difficulty * 0.0006, best + 0.05, 0.34),
-    partial: clamp(best + 0.26 - difficulty * 0.0004, best + 0.14, 0.42),
-    fail: 0.46, // |offset| > 0.46 → 大失败（两端各 4%）
+    success: clamp(best + (0.14 - difficulty * 0.0006) * ZONE_SCALE, best + 0.055, 0.36),
+    partial: clamp(best + (0.26 - difficulty * 0.0004) * ZONE_SCALE, best + 0.155, 0.44),
+    fail: 0.48, // |offset| > 0.48 → 大失败（两端各 2%）
   };
   return { actionId: id, label, difficulty, reward, speedHz, zones };
+}
+
+/**
+ * 大失败运气豁免：转针停在大失败区时，按运气有概率降档为普通失败（有惊无险）。
+ * 只用于玩家亲手转针的结果；autoTier 的大失败已经是低概率，不再豁免。
+ */
+export function fumbleSaveChance(luck: number): number {
+  return clamp(0.35 + luck * 0.003, 0.35, 0.68);
 }
 
 /** offset = |停针位置 - 0.5|，映射到五档 */
@@ -91,6 +112,19 @@ const CATEGORY_PROFILE: Record<
   other: { attrs: { mood: 0.3 }, money: 0, skillCat: null, connections: 0.1 },
 };
 
+const DEFAULT_ENERGY_COST: Record<ActionCategory, number> = {
+  study: 22,
+  work: 28,
+  social: 12,
+  romance: 12,
+  exercise: 24,
+  leisure: -16,
+  adventure: 30,
+  finance: 18,
+  health: -12,
+  other: 10,
+};
+
 /** 收入基准：按人生阶段和现有身份粗估一次行动的金钱量级 */
 function moneyScale(state: GameState): number {
   const job = state.character.identity.job;
@@ -108,20 +142,24 @@ export function resolveAction(
   tier: Tier,
 ): ActionResolution {
   const profile = CATEGORY_PROFILE[intent.category];
-  const mult = TIER_MULT[tier];
+  // 高危行动敢转针就该有超额回报：成功档以上收益 ×1.25，失败的代价不变
+  const base = TIER_MULT[tier];
+  const mult = intent.risk === "high" && base > 0 ? base * 1.25 : base;
+  const worldMult = worldModifierFor(state, intent.category);
   const effort = clamp(intent.hours / 20, 0.2, 2); // 投入时间放大效果
   const deltas: StatDeltas = emptyDeltas();
+  deltas.energy = -(intent.energyCost ?? DEFAULT_ENERGY_COST[intent.category]);
 
   for (const [k, w] of Object.entries(profile.attrs)) {
     const key = k as AttrKey;
-    const raw = (w ?? 0) * mult * effort * rng.range(1.5, 3);
+    const raw = (w ?? 0) * mult * effort * rng.range(1.5, 3) * ((w ?? 0) > 0 ? worldMult : 1);
     // 负面基线（如学习掉心情）在失败时不反转成收益
     const v = (w ?? 0) < 0 ? Math.min(0, raw) : raw;
     if (Math.abs(v) >= 0.5) deltas.attrs[key] = Math.round(v);
   }
   if (profile.money !== 0) {
     const base = moneyScale(state) * profile.money * effort;
-    deltas.money = Math.round(base * (profile.money > 0 ? mult : 1) * rng.range(0.7, 1.4));
+    deltas.money = Math.round(base * (profile.money > 0 ? mult * worldMult : 1) * rng.range(0.7, 1.4));
   }
   if (profile.connections > 0 && mult > 0) {
     deltas.connections = Math.round(profile.connections * mult * rng.range(0.5, 1.5));
@@ -130,7 +168,7 @@ export function resolveAction(
     deltas.skillXp.push({
       name: intent.summary.slice(0, 12),
       category: profile.skillCat,
-      xp: Math.round(20 * mult * effort),
+      xp: Math.round(20 * mult * effort * worldMult),
     });
   }
   // 失败/大失败的代价：心境受挫，大失败可能伤身/破财
@@ -151,12 +189,16 @@ export function resolveAction(
       delta: Math.round(mult * rng.range(3, 8)),
     });
   }
+  // 学龄前儿童不发生金钱交易（吃穿用度由家庭承担）
+  if (state.world.year - state.character.birthYear < 6) {
+    deltas.money = 0;
+  }
 
   return {
     intent,
     tier,
     deltas,
-    mechanical: `「${intent.summary}」→ ${TIER_LABELS[tier]}（判定属性：${ATTR_LABELS[intent.attr]}）${describeDeltas(deltas)}`,
+    mechanical: `「${intent.summary}」→ ${TIER_LABELS[tier]}（判定属性：${ATTR_LABELS[intent.attr]}）${worldMult !== 1 ? `【世界趋势×${worldMult.toFixed(2)}】` : ""}${describeDeltas(deltas)}`,
   };
 }
 
@@ -205,6 +247,7 @@ export function applyDeltas(state: GameState, deltas: StatDeltas): void {
     const key = k as AttrKey;
     c.attrs[key] = clamp(c.attrs[key] + (v ?? 0), 0, 100);
   }
+  c.energy = clamp(c.energy + deltas.energy, 0, 100);
   c.money = Math.round(c.money + deltas.money);
   c.connections = Math.max(0, c.connections + deltas.connections);
   for (const gain of deltas.skillXp) {
@@ -231,6 +274,7 @@ export function describeDeltas(d: StatDeltas): string {
   for (const [k, v] of Object.entries(d.attrs)) {
     if (v) parts.push(`${ATTR_LABELS[k as AttrKey]}${v > 0 ? "+" : ""}${v}`);
   }
+  if (d.energy) parts.push(`精力${d.energy > 0 ? "+" : ""}${d.energy}`);
   if (d.money) parts.push(`金钱${d.money > 0 ? "+" : ""}${d.money}`);
   if (d.connections) parts.push(`人脉+${d.connections}`);
   for (const s of d.skillXp) parts.push(`技能「${s.name}」经验+${s.xp}`);

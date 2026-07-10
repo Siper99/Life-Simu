@@ -80,6 +80,7 @@ export interface CharacterState {
   gender: "男" | "女";
   birthYear: number;
   attrs: Attributes;
+  energy: number; // 0..100，跨回合保留；透支后需要主动休息恢复
   money: number;
   connections: number; // 人脉点
   skills: Skill[];
@@ -115,6 +116,7 @@ export interface ActionIntent {
   summary: string; // 玩家想做的事，一句话
   category: ActionCategory;
   hours: number; // 本周投入小时
+  energyCost?: number; // 正数消耗精力，负数恢复精力
   risk: "none" | "low" | "high"; // high 触发摆动条
   attr: AttrKey; // 主判定属性
   nsfw: boolean;
@@ -151,6 +153,7 @@ export interface ZoneWidths {
 
 export interface StatDeltas {
   attrs: Partial<Attributes>;
+  energy: number;
   money: number;
   connections: number;
   skillXp: { name: string; category: Skill["category"]; xp: number }[];
@@ -207,6 +210,12 @@ export interface MemoryNote {
   label: string; // "2008年3月" / "2008年"
   text: string;
 }
+export interface DecisionHistoryEntry {
+  turn: number;
+  choiceIds: string[];
+  categories: ActionCategory[];
+}
+
 
 export interface GameState {
   id: string;
@@ -224,6 +233,7 @@ export interface GameState {
   monthlySummaries: MemoryNote[]; // 月度摘要（最多 24 条）
   chronicle: string[]; // 人生编年史（每年一段）
   pending: PendingTurn | null;
+  decisionHistory: DecisionHistoryEntry[]; // 导演系统只读取最近的结构化选择
   ended: boolean;
   epitaph?: string;
 }
@@ -259,5 +269,5 @@ export function formatDate(state: GameState): string {
 }
 
 export function emptyDeltas(): StatDeltas {
-  return { attrs: {}, money: 0, connections: 0, skillXp: [], affinity: [] };
+  return { attrs: {}, energy: 0, money: 0, connections: 0, skillXp: [], affinity: [] };
 }

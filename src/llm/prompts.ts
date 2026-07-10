@@ -1,6 +1,8 @@
-// 提示词模板：意图解析（结构化输出）、叙事生成、记忆压缩。
+// 提示词模板：意图解析（结构化输出）、行动卡补充、叙事生成、记忆压缩。
 
 import { statusCard, historyContext } from "../engine/memory";
+import { describeDeltas } from "../engine/resolver";
+import { DecisionBoard } from "../engine/decisions";
 import { TurnOutcome } from "../engine/turn";
 import { GameState, TIER_LABELS, formatDate } from "../engine/types";
 import { ContentRating } from "./types";
@@ -75,6 +77,38 @@ export function narrativeUserPrompt(state: GameState, playerText: string, outcom
   return lines.join("\n");
 }
 
+export const CHOICE_SYSTEM = `你是人生模拟游戏的编剧。决策盘上已经有一批通用行动卡，你的任务是补充 3 张「只属于这个角色此刻人生」的行动卡——紧扣他的具体人物关系、技能、身份、时代背景和最近发生的事，比通用卡更具体、更有戏剧张力。
+
+只输出 JSON 数组，每张卡：
+{
+  "title": "卡片标题（≤12字，动词开头，具体到人和事）",
+  "description": "一句话说清这件事是什么、为什么是现在（≤40字）",
+  "category": "study|work|social|romance|exercise|leisure|adventure|finance|health|other 之一",
+  "attr": "health|fitness|intelligence|eq|charm|mood|luck 之一（最依赖的属性）",
+  "timeCost": 1 或 2,
+  "energyCost": -25 到 40 的整数（负数表示这件事能恢复精力）,
+  "risk": "low" 或 "high"（high = 高风险高回报，会触发命运判定）,
+  "consequences": ["可能的后果", "另一种后果"]（每条≤12字，一好一坏最佳）,
+  "target": "涉及的NPC真实姓名（没有则省略）"
+}
+
+规则：
+- 3 张卡方向必须不同：一张围绕具体的人（用状态卡里的真实姓名），一张推进成长/事业/处境，一张出格的、平时不会做的事。
+- 必须符合角色年龄能做的事；婴幼儿写观察、模仿、亲子互动。
+- 至多 1 张 risk 为 high。
+- 不要与「已有选项」重复或近似。
+- 只输出 JSON 数组，不要任何解释。`;
+
+export function choiceUserPrompt(state: GameState, board: DecisionBoard): string {
+  const lines: string[] = [];
+  lines.push(`【时间】${formatDate(state)}｜时代背景：${board.world.title}——${board.world.summary}`);
+  lines.push(`【角色状态】\n${statusCard(state)}`);
+  const hist = historyContext(state);
+  if (hist) lines.push(hist);
+  lines.push(`【已有选项（不要重复）】${board.choices.map((c) => c.title).join("、")}`);
+  return lines.join("\n");
+}
+
 export const SUMMARY_SYSTEM = `你是记忆压缩器。把给出的人生片段浓缩成一段 60 字以内的第二人称摘要，只保留对后续人生有影响的事实（关系变化、重大得失、身份变动）。只输出摘要正文。`;
 
 export function epitaphPrompt(state: GameState): string {
@@ -90,7 +124,13 @@ export function epitaphPrompt(state: GameState): string {
 export function fallbackNarrative(outcome: TurnOutcome): string {
   const lines: string[] = outcome.actions.map((a) => a.mechanical);
   if (outcome.event) {
-    lines.push(`【${outcome.event.skeleton.name}】${outcome.event.skeleton.prompt}——${TIER_LABELS[outcome.event.tier]}`);
+    const ev = outcome.event;
+    // 玩家转过针的事件报判定档位；静默事件只报实际影响，无影响就只讲事
+    const effects = describeDeltas(ev.deltas).replace(/^：/, "");
+    let line = `【${ev.skeleton.name}】${ev.skeleton.prompt}`;
+    if (ev.skeleton.requiresCheck) line += `——${TIER_LABELS[ev.tier]}`;
+    if (effects) line += `（${effects}）`;
+    lines.push(line);
   }
   if (outcome.passive.length > 0) lines.push(outcome.passive.join("；"));
   if (outcome.died) lines.push(`你的人生走到了尽头：${outcome.deathCause}。`);

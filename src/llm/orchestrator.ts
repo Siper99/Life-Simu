@@ -1,12 +1,15 @@
 // 回合编排的 LLM 侧：意图解析、叙事生成、记忆压缩、墓志铭。全部带无 LLM 兜底。
 
+import { DecisionBoard, DecisionChoice, sanitizeLlmChoices } from "../engine/decisions";
 import { fallbackParseIntents } from "../engine/resolver";
 import { TurnOutcome } from "../engine/turn";
 import { ActionIntent, GameState } from "../engine/types";
 import { chat, extractJson } from "./client";
 import {
+  CHOICE_SYSTEM,
   INTENT_SYSTEM,
   SUMMARY_SYSTEM,
+  choiceUserPrompt,
   epitaphPrompt,
   fallbackNarrative,
   intentUserPrompt,
@@ -95,6 +98,33 @@ export async function narrateTurn(
   } catch (e) {
     console.warn("叙事生成走兜底：", e);
     return { text: fallbackNarrative(outcome), usedLlm: false };
+  }
+}
+
+/**
+ * 决策盘补充卡：让 LLM 基于角色当下的处境提出更具体的行动选项。
+ * 失败/未配置时返回空数组——固定卡池本身就是完整兜底。
+ */
+export async function proposeChoices(
+  settings: AppSettings,
+  state: GameState,
+  board: DecisionBoard,
+): Promise<DecisionChoice[]> {
+  const profile = profileForRole(settings, "narrative");
+  if (!profile) return [];
+  try {
+    const raw = await chat(
+      profile,
+      [
+        { role: "system", content: CHOICE_SYSTEM },
+        { role: "user", content: choiceUserPrompt(state, board) },
+      ],
+      { temperature: 0.9, maxTokens: 800 },
+    );
+    return sanitizeLlmChoices(state, extractJson(raw));
+  } catch (e) {
+    console.warn("补充行动卡生成失败，仅用固定卡池：", e);
+    return [];
   }
 }
 

@@ -16,6 +16,13 @@ import { AppSettings, DEFAULT_SETTINGS } from "../llm/types";
 const IS_TAURI = "__TAURI_INTERNALS__" in window;
 const DIR = { baseDir: BaseDirectory.AppData };
 
+/** 旧存档迁移：新增规则字段时在这里补默认值，避免已有角色无法继续。 */
+function migrateGame(state: GameState): GameState {
+  state.character.energy ??= 75;
+  state.decisionHistory ??= [];
+  return state;
+}
+
 async function ensureDirs(): Promise<void> {
   if (!(await exists("saves", DIR))) {
     await mkdir("saves", { ...DIR, recursive: true });
@@ -55,7 +62,7 @@ export async function listSaves(): Promise<SaveMeta[]> {
     for (const entry of await readDir("saves", DIR)) {
       if (!entry.name.endsWith(".json")) continue;
       try {
-        const state = JSON.parse(await readTextFile(`saves/${entry.name}`, DIR)) as GameState;
+        const state = migrateGame(JSON.parse(await readTextFile(`saves/${entry.name}`, DIR)) as GameState);
         out.push(metaOf(state));
       } catch {
         // 损坏的存档跳过
@@ -66,7 +73,7 @@ export async function listSaves(): Promise<SaveMeta[]> {
       const key = localStorage.key(i);
       if (!key?.startsWith("lifesim:save-")) continue;
       try {
-        out.push(metaOf(JSON.parse(localStorage.getItem(key)!) as GameState));
+        out.push(metaOf(migrateGame(JSON.parse(localStorage.getItem(key)!) as GameState)));
       } catch {
         // skip
       }
@@ -80,7 +87,7 @@ export async function loadGame(id: string): Promise<GameState> {
     ? await readTextFile(`saves/${id}.json`, DIR)
     : localStorage.getItem(`lifesim:${id}`);
   if (!json) throw new Error("存档不存在");
-  return JSON.parse(json) as GameState;
+  return migrateGame(JSON.parse(json) as GameState);
 }
 
 export async function deleteSave(id: string): Promise<void> {

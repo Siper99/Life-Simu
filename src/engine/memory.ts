@@ -51,11 +51,12 @@ export function statusCard(state: GameState): string {
     `姓名：${c.name}（${c.gender}，${age}岁，${lifeStageOf(age)}期）`,
     `坐标：${c.identity.residence}｜家庭：${state.background.familyClass}`,
     `属性：${attrs}`,
-    `金钱：${c.money}｜人脉：${c.connections}`,
+    `精力：${c.energy}/100｜金钱：${c.money}｜人脉：${c.connections}`,
     `身份：${c.identity.schooling ?? c.identity.job?.title ?? "无业"}｜婚恋：${c.identity.maritalStatus}${c.identity.conditions.length > 0 ? `｜状态：${c.identity.conditions.join("、")}` : ""}`,
     `天赋：${c.talents.map((t) => t.name).join("、") || "无"}`,
     skills ? `技能：${skills}` : "",
     npcs ? `关系：${npcs}` : "",
+    state.world.macroNotes.length > 0 ? `世界：${state.world.macroNotes.join("；")}` : "",
   ]
     .filter(Boolean)
     .join("\n");

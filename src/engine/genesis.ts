@@ -98,9 +98,15 @@ function rollAttr(rng: Rng): number {
   return Math.round((rng.range(15, 85) + rng.range(15, 85)) / 2);
 }
 
-function makeParent(rng: Rng, relation: "父亲" | "母亲", surname: string, familyClass: string): NPC {
+function makeParent(
+  rng: Rng,
+  relation: "父亲" | "母亲",
+  surname: string,
+  familyClass: string,
+  pickGiven: (pool: string[]) => string,
+): NPC {
   const jobs = PARENT_JOBS[familyClass] ?? PARENT_JOBS["工薪"];
-  const given = relation === "父亲" ? rng.pick(MALE_NAMES) : rng.pick(FEMALE_NAMES);
+  const given = pickGiven(relation === "父亲" ? MALE_NAMES : FEMALE_NAMES);
   return {
     id: `npc-${relation}`,
     name: `${relation === "母亲" ? rng.pick(SURNAMES) : surname}${given}`,
@@ -131,7 +137,19 @@ export function rollGenesis(rng: Rng, genderPref: GenderPref = "random"): Genesi
 
   const gender = genderPref === "random" ? (rng.chance(0.512) ? "男" : "女") : genderPref;
   const surname = rng.pick(SURNAMES);
-  const name = `${surname}${gender === "男" ? rng.pick(MALE_NAMES) : rng.pick(FEMALE_NAMES)}`;
+  // 同姓家庭成员从同一个名字池抽取，必须排重，避免「哥哥和你同名」
+  const usedGivenNames = new Set<string>();
+  const pickGiven = (pool: string[]): string => {
+    for (let tries = 0; tries < 10; tries++) {
+      const given = rng.pick(pool);
+      if (!usedGivenNames.has(given)) {
+        usedGivenNames.add(given);
+        return given;
+      }
+    }
+    return rng.pick(pool); // 池子极端耗尽时容忍重复
+  };
+  const name = `${surname}${pickGiven(gender === "男" ? MALE_NAMES : FEMALE_NAMES)}`;
 
   const attrs: Attributes = {
     health: rollAttr(rng),
@@ -143,8 +161,8 @@ export function rollGenesis(rng: Rng, genderPref: GenderPref = "random"): Genesi
     luck: rollAttr(rng),
   };
 
-  const father = makeParent(rng, "父亲", surname, fam.name);
-  const mother = makeParent(rng, "母亲", surname, fam.name);
+  const father = makeParent(rng, "父亲", surname, fam.name, pickGiven);
+  const mother = makeParent(rng, "母亲", surname, fam.name, pickGiven);
   const npcs: NPC[] = [father, mother];
 
   const siblingCount = fam.name === "豪门" || fam.name === "富裕" ? rng.int(0, 2) : rng.int(0, 3);
@@ -152,7 +170,7 @@ export function rollGenesis(rng: Rng, genderPref: GenderPref = "random"): Genesi
     const isBrother = rng.chance(0.5);
     npcs.push({
       id: `npc-sibling-${i}`,
-      name: `${surname}${isBrother ? rng.pick(MALE_NAMES) : rng.pick(FEMALE_NAMES)}`,
+      name: `${surname}${pickGiven(isBrother ? MALE_NAMES : FEMALE_NAMES)}`,
       relation: rng.chance(0.5) ? (isBrother ? "哥哥" : "姐姐") : (isBrother ? "弟弟" : "妹妹"),
       affinity: rng.int(20, 75),
       personality: rng.sample(PERSONALITIES, 2),
@@ -175,6 +193,7 @@ export function rollGenesis(rng: Rng, genderPref: GenderPref = "random"): Genesi
     gender,
     birthYear,
     attrs,
+    energy: rng.int(68, 88),
     money: 0,
     connections: 0,
     skills: [],
@@ -244,6 +263,7 @@ export function newGameState(
     weeklyNotes: [],
     monthlySummaries: [],
     chronicle: [],
+    decisionHistory: [],
     pending: null,
     ended: false,
   };
