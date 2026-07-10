@@ -7,9 +7,9 @@ export type ProfileRole = "narrative" | "nsfw" | "summary";
 export interface LlmProfile {
   id: string;
   name: string;
-  // openai = 一切 OpenAI 兼容端点（含 Ollama/LM Studio/中转）；deepseek = DeepSeek 官方（协议同 OpenAI）
-  kind: "openai" | "anthropic" | "deepseek";
-  baseURL: string; // openai/deepseek: http://host/v1 ；anthropic: https://api.anthropic.com
+  // openai = 一切 OpenAI 兼容端点（含 Ollama/LM Studio/中转）；deepseek/xai = 各自官方端点（协议同 OpenAI）
+  kind: "openai" | "anthropic" | "deepseek" | "xai";
+  baseURL: string; // openai/deepseek/xai: http://host/v1 ；anthropic: https://api.anthropic.com
   apiKey: string;
   model: string;
   roles: ProfileRole[];
@@ -19,6 +19,12 @@ export interface LlmProfile {
 export const DEEPSEEK_DEFAULTS = {
   baseURL: "https://api.deepseek.com/v1",
   model: "deepseek-chat",
+} as const;
+
+/** xAI（Grok）官方端点预设 */
+export const XAI_DEFAULTS = {
+  baseURL: "https://api.x.ai/v1",
+  model: "grok-4",
 } as const;
 
 export type ContentRating = "clean" | "suggestive" | "explicit";

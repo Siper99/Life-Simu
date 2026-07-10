@@ -12,6 +12,7 @@ import {
   LlmProfile,
   ProfileRole,
   SWING_DIFFICULTY_LABELS,
+  XAI_DEFAULTS,
 } from "../llm/types";
 import { useStore } from "../store/gameStore";
 
@@ -45,10 +46,23 @@ function deepseekProfile(): LlmProfile {
   };
 }
 
+function xaiProfile(): LlmProfile {
+  return {
+    id: `p-${Date.now()}`,
+    name: "xAI",
+    kind: "xai",
+    baseURL: XAI_DEFAULTS.baseURL,
+    apiKey: "",
+    model: XAI_DEFAULTS.model,
+    roles: ["narrative"],
+  };
+}
+
 const KIND_PLACEHOLDERS: Record<LlmProfile["kind"], { url: string; model: string }> = {
   openai: { url: "https://api.openai.com/v1", model: "模型名，如 gpt-4o" },
   anthropic: { url: "https://api.anthropic.com", model: "模型名，如 claude-sonnet-5" },
   deepseek: { url: DEEPSEEK_DEFAULTS.baseURL, model: "deepseek-chat 或 deepseek-reasoner" },
+  xai: { url: XAI_DEFAULTS.baseURL, model: "grok-4 或 grok-4-fast" },
 };
 
 export function Settings() {
@@ -124,12 +138,15 @@ export function Settings() {
                 value={p.kind}
                 onChange={(e) => {
                   const kind = e.target.value as LlmProfile["kind"];
-                  // 切到 DeepSeek 时自动填官方地址与默认模型（仅当还是别家默认值/空时，不覆盖手改的）
+                  // 切到 DeepSeek/xAI 时自动填官方地址与默认模型（仅当还是别家默认值/空时，不覆盖手改的）
                   const patch: Partial<LlmProfile> = { kind };
+                  const untouched = ["", "https://api.openai.com/v1", "https://api.anthropic.com"];
                   if (kind === "deepseek") {
-                    const untouched = ["", "https://api.openai.com/v1", "https://api.anthropic.com"];
                     if (untouched.includes(p.baseURL.trim())) patch.baseURL = DEEPSEEK_DEFAULTS.baseURL;
                     if (!p.model.trim()) patch.model = DEEPSEEK_DEFAULTS.model;
+                  } else if (kind === "xai") {
+                    if (untouched.includes(p.baseURL.trim())) patch.baseURL = XAI_DEFAULTS.baseURL;
+                    if (!p.model.trim()) patch.model = XAI_DEFAULTS.model;
                   }
                   patchProfile(p.id, patch);
                 }}
@@ -137,6 +154,7 @@ export function Settings() {
                 <option value="openai">OpenAI 兼容</option>
                 <option value="anthropic">Anthropic</option>
                 <option value="deepseek">DeepSeek</option>
+                <option value="xai">xAI（Grok）</option>
               </select>
               <input
                 className="input profile-url"
@@ -198,6 +216,12 @@ export function Settings() {
             onClick={() => setDraft({ ...draft, profiles: [...draft.profiles, deepseekProfile()] })}
           >
             ＋ 添加 DeepSeek
+          </button>
+          <button
+            className="btn-ghost"
+            onClick={() => setDraft({ ...draft, profiles: [...draft.profiles, xaiProfile()] })}
+          >
+            ＋ 添加 xAI
           </button>
         </div>
       </section>
