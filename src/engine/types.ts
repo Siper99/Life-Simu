@@ -11,6 +11,13 @@ export type AttrKey =
 
 export type Attributes = Record<AttrKey, number>;
 
+/** 先天基线不是伤病下的硬下限；潜力上限是正常成长和训练不可突破的个人边界。 */
+export interface AttributeRange {
+  floor: number;
+  ceiling: number;
+}
+export type AttributeBounds = Record<AttrKey, AttributeRange>;
+
 export const ATTR_LABELS: Record<AttrKey, string> = {
   health: "健康",
   fitness: "体质",
@@ -32,7 +39,11 @@ export interface Skill {
 export interface NPC {
   id: string;
   name: string;
-  relation: string; // 父亲/母亲/同学/恋人/上司……
+  relation: string; // 父亲/母亲/同学/恋人/上司……（不再混入职业）
+  birthYear: number;
+  occupation: string | null;
+  health: number; // 0..100，随年龄和事件变化
+  conditions: string[];
   affinity: number; // -100..100
   personality: string[];
   memories: string[]; // 共同记忆摘要，最多保留 8 条
@@ -40,13 +51,16 @@ export interface NPC {
 }
 
 export type LifeStage = "婴儿" | "童年" | "少年" | "青年" | "中年" | "老年";
-export type Granularity = "year" | "month" | "week";
+export type Granularity = "year" | "season" | "month" | "week";
 
 export interface Job {
   title: string;
   employer: string;
   weeklyHours: number;
   weeklyPay: number;
+  track: string; // 职业路线，用于稳定地产生晋升头衔
+  level: number; // 0..4
+  xp: number; // 0..99，工作行动即时累积
 }
 
 export interface Identity {
@@ -75,13 +89,18 @@ export interface Background {
   familyDesc: string; // 给 LLM 的家庭背景描述
 }
 
+/** 生活方式档位：金钱的持续性花费窗口，定义见 economy.ts */
+export type LifestyleKey = "frugal" | "standard" | "comfort" | "lavish";
+
 export interface CharacterState {
   name: string;
   gender: "男" | "女";
   birthYear: number;
   attrs: Attributes;
+  attrBounds: AttributeBounds;
   energy: number; // 0..100，跨回合保留；透支后需要主动休息恢复
   money: number;
+  lifestyle: LifestyleKey; // 成年后生效；钱包撑不住会自动降档
   connections: number; // 人脉点
   skills: Skill[];
   npcs: NPC[];
@@ -122,6 +141,7 @@ export interface ActionIntent {
   nsfw: boolean;
   target?: string; // 涉及的 NPC 姓名
   skill?: string; // 这件事在积累的技能名（2~6字名词，如 吉他/木工；缺省由引擎推断）
+  moneyCost?: number; // 显性花费（报班费/医药费）：无论成败都扣，买来的服务放大正向产出
 }
 
 export type Tier = "crit" | "success" | "partial" | "fail" | "fumble";
@@ -208,6 +228,7 @@ export interface PendingTurn {
   checks: SwingCheck[]; // 待处理（含事件判定，actionId 以 "event:" 前缀区分）
   checkResults: { checkId: string; tier: Tier; offset: number; saved?: boolean }[];
   event: EventSkeleton | null;
+  connectionsSpent?: number; // 本回合动用人脉护航花掉的点数（已扣除，结算时只补记录）
 }
 
 export interface LogEntry {
@@ -263,6 +284,22 @@ export function clamp(v: number, lo: number, hi: number): number {
   return Math.min(hi, Math.max(lo, v));
 }
 
+export function energyStateLabel(energy: number): string {
+  if (energy >= 75) return "充沛：可以承担一次极限投入";
+  if (energy >= 50) return "稳定：可以安排高强度行动";
+  if (energy >= 25) return "疲惫：更适合轻量安排或恢复";
+  if (energy > 5) return "低谷：强行投入会明显打折";
+  return "透支：继续硬撑会伤害健康";
+}
+
+export function energyIntensityLabel(cost: number): string {
+  if (cost < 0) return "恢复";
+  if (cost >= 50) return "极限";
+  if (cost >= 35) return "高强度";
+  if (cost >= 18) return "中等";
+  return "轻量";
+}
+
 export function ageOf(state: GameState): number {
   return state.world.year - state.character.birthYear;
 }
@@ -277,13 +314,15 @@ export function lifeStageOf(age: number): LifeStage {
 }
 
 export function granularityOf(age: number): Granularity {
-  if (age < 6) return "year";
-  if (age < 12) return "month";
-  return "week";
+  return age < 6 ? "year" : "season";
 }
 
 export function formatDate(state: GameState): string {
   const age = ageOf(state);
+  if (state.granularity === "year") return `${state.world.year}年（${age}岁）`;
+  if (state.granularity === "season") {
+    return `${state.world.year}年 第${Math.min(4, Math.ceil(state.world.week / 13))}季（${age}岁）`;
+  }
   return `${state.world.year}年 第${state.world.week}周（${age}岁）`;
 }
 

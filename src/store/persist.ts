@@ -10,19 +10,67 @@ import {
   remove,
   writeTextFile,
 } from "@tauri-apps/plugin-fs";
-import { GameState } from "../engine/types";
+import { GameState, granularityOf } from "../engine/types";
+import { migratedAttributeBounds } from "../engine/attributes";
 import { AppSettings, DEFAULT_SETTINGS } from "../llm/types";
 
 const IS_TAURI = "__TAURI_INTERNALS__" in window;
 const DIR = { baseDir: BaseDirectory.AppData };
 
 /** 旧存档迁移：新增规则字段时在这里补默认值，避免已有角色无法继续。 */
-function migrateGame(state: GameState): GameState {
+export function migrateGame(state: GameState): GameState {
   state.character.energy ??= 75;
+  state.character.lifestyle ??= "standard";
   state.decisionHistory ??= [];
   state.hooks ??= [];
+  state.character.attrBounds ??= migratedAttributeBounds(state.character, state.id);
+  state.granularity = granularityOf(state.world.year - state.character.birthYear);
+
+  for (const npc of state.character.npcs) {
+    // v0.1 的父母关系写成“父亲（职业）”，迁移时拆成两个可独立变化的字段。
+    const legacy = npc.relation.match(/^([^（(]+)[（(]([^）)]+)[）)]$/);
+    if (legacy) {
+      npc.relation = legacy[1];
+      npc.occupation ??= legacy[2];
+    }
+    npc.birthYear ??= state.character.birthYear + (
+      npc.relation === "父亲" ? -30
+      : npc.relation === "母亲" ? -28
+      : /哥哥|姐姐/.test(npc.relation) ? -3
+      : /弟弟|妹妹/.test(npc.relation) ? 3
+      : 0
+    );
+    npc.occupation ??= /哥哥|姐姐|弟弟|妹妹/.test(npc.relation) ? "学生" : null;
+    npc.health ??= 70;
+    npc.conditions ??= [];
+  }
+
+  const job = state.character.identity.job;
+  if (job) {
+    job.track ??= "通用";
+    job.level ??= 0;
+    job.xp ??= 0;
+  }
+
   // 旧存档的技能名是行动描述（"扶着家具探索"）：6 字以上判定为旧数据，清除
   state.character.skills = state.character.skills.filter((s) => s.name.length < 6);
+
+  // 学段命名的课业技能已废弃：合并为不过时的「学识」（保留练得最深的那份进度）
+  const LEGACY_STUDY = new Set(["小学课业", "初中课业", "高中课业", "大学课业", "大学学业", "课业"]);
+  const legacy = state.character.skills.filter((s) => LEGACY_STUDY.has(s.name));
+  if (legacy.length > 0) {
+    state.character.skills = state.character.skills.filter((s) => !LEGACY_STUDY.has(s.name));
+    const best = legacy.reduce((a, b) => (b.level > a.level || (b.level === a.level && b.xp > a.xp) ? b : a));
+    const existing = state.character.skills.find((s) => s.name === "学识");
+    if (existing) {
+      if (best.level > existing.level || (best.level === existing.level && best.xp > existing.xp)) {
+        existing.level = best.level;
+        existing.xp = best.xp;
+      }
+    } else {
+      state.character.skills.push({ ...best, name: "学识", category: "学业" });
+    }
+  }
   return state;
 }
 

@@ -20,7 +20,8 @@ import {
 } from "./types";
 import { Rng } from "./rng";
 import { worldModifierFor } from "./decisions";
-import { skillForIntent } from "./skills";
+import { skillForIntent, skillMasteryFor, xpToNext } from "./skills";
+import { applyBoundedAttributeDelta, attributeCeiling } from "./attributes";
 
 // ---------- 摆动条参数 ----------
 
@@ -177,38 +178,53 @@ export function resolveAction(
   tier: Tier,
 ): ActionResolution {
   const profile = CATEGORY_PROFILE[intent.category];
+  const energyCost = intent.energyCost ?? DEFAULT_ENERGY_COST[intent.category];
+  const availableEnergy = state.character.energy;
+  const shortfall = energyCost > 0 ? Math.max(0, energyCost - availableEnergy) : 0;
+  const staminaRatio = energyCost > 0 ? clamp(availableEnergy / energyCost, 0.25, 1) : 1;
+  // 高消耗行动在精力够时回报更高；硬撑时收益按可用精力打折，并产生健康代价。
+  const intensityMult = energyCost > 0 ? clamp(0.75 + energyCost / 100, 0.8, 1.45) : 1;
+  const outputMult = intensityMult * staminaRatio;
   // 高危行动敢转针就该有超额回报：成功档以上收益 ×1.25，失败的代价不变
   const base = TIER_MULT[tier];
   const mult = intent.risk === "high" && base > 0 ? base * 1.25 : base;
   const worldMult = worldModifierFor(state, intent.category);
-  const effort = clamp(intent.hours / 20, 0.2, 2); // 投入时间放大效果
+  const effort = clamp(intent.hours / 20, 0.2, 2);
   const deltas: StatDeltas = emptyDeltas();
-  deltas.energy = -(intent.energyCost ?? DEFAULT_ENERGY_COST[intent.category]);
+  deltas.energy = -energyCost;
+
+  // 花钱办事（报班/就医）：费用无论成败都花出去；买来的服务放大正向产出
+  const paid = Math.max(0, Math.round(intent.moneyCost ?? 0));
+  const paidHealthBoost = paid > 0 && intent.category === "health" ? 2 : 1;
 
   for (const [k, w] of Object.entries(profile.attrs)) {
     const key = k as AttrKey;
-    const raw = (w ?? 0) * mult * effort * rng.range(1.5, 3) * ((w ?? 0) > 0 ? worldMult : 1);
-    // 负面基线（如学习掉心情）在失败时不反转成收益
+    const raw = (w ?? 0) * mult * effort * rng.range(1.5, 3) * ((w ?? 0) > 0 ? worldMult * outputMult * paidHealthBoost : 1);
     const v = (w ?? 0) < 0 ? Math.min(0, raw) : raw;
     if (Math.abs(v) >= 0.5) deltas.attrs[key] = Math.round(v);
   }
-  if (profile.money !== 0) {
-    const base = moneyScale(state) * profile.money * effort;
-    deltas.money = Math.round(base * (profile.money > 0 ? mult * worldMult : 1) * rng.range(0.7, 1.4));
+  // 熟练的事更值钱：技能等级放大正向收入（工作/理财），失败的损失不放大
+  const mastery = skillMasteryFor(state, intent);
+  const masteryMult = 1 + 0.06 * (mastery?.level ?? 0);
+  if (paid > 0) {
+    deltas.money = -paid; // 显性花费直接替代类别默认的零星收支
+  } else if (profile.money !== 0) {
+    const moneyBase = moneyScale(state) * profile.money * effort;
+    const earnMult = mult > 0 ? masteryMult : 1;
+    deltas.money = Math.round(moneyBase * (profile.money > 0 ? mult * worldMult * outputMult * earnMult : 1) * rng.range(0.7, 1.4));
   }
   if (profile.connections > 0 && mult > 0) {
-    deltas.connections = Math.round(profile.connections * mult * rng.range(0.5, 1.5));
+    deltas.connections = Math.round(profile.connections * mult * outputMult * rng.range(0.5, 1.5));
   }
-  // 技能是「手艺名词」不是行动描述：由 skills.ts 推断（意图自带 > 关键词 > 类别兜底 > 不积累）
   const trained = mult > 0 ? skillForIntent(state, intent) : null;
   if (trained) {
+    // 花钱请人指路（报班），技能经验 ×2.5：钱换时间
     deltas.skillXp.push({
       name: trained.name,
       category: trained.category,
-      xp: Math.round(20 * mult * effort * worldMult),
+      xp: Math.round(20 * mult * effort * worldMult * outputMult * (paid > 0 ? 2.5 : 1)),
     });
   }
-  // 失败/大失败的代价：心境受挫，大失败可能伤身/破财
   if (tier === "fail") {
     deltas.attrs.mood = (deltas.attrs.mood ?? 0) - rng.int(2, 5);
   } else if (tier === "fumble") {
@@ -220,22 +236,35 @@ export function resolveAction(
       deltas.money = -Math.round(moneyScale(state) * rng.range(1, 3));
     }
   }
+  if (shortfall > 0) {
+    deltas.attrs.health = (deltas.attrs.health ?? 0) - Math.ceil(shortfall / 12);
+    deltas.attrs.mood = (deltas.attrs.mood ?? 0) - Math.ceil(shortfall / 15);
+  }
   if (intent.target && (intent.category === "social" || intent.category === "romance")) {
     deltas.affinity.push({
       npcName: intent.target,
-      delta: Math.round(mult * rng.range(3, 8)),
+      delta: Math.round(mult * outputMult * rng.range(3, 8)),
     });
   }
-  // 学龄前儿童不发生金钱交易（吃穿用度由家庭承担）
-  if (state.world.year - state.character.birthYear < 6) {
-    deltas.money = 0;
+  if (state.world.year - state.character.birthYear < 6) deltas.money = 0;
+
+  // 结算文本直接反映潜力封顶后的实际增量。
+  for (const [rawKey, rawValue] of Object.entries(deltas.attrs)) {
+    const key = rawKey as AttrKey;
+    if ((rawValue ?? 0) > 0) {
+      deltas.attrs[key] = Math.max(0, Math.min(rawValue ?? 0, attributeCeiling(state.character, key) - state.character.attrs[key]));
+    }
   }
+  const energyNote = shortfall > 0
+    ? `【强行透支：缺少${shortfall}精力，收益打折且伤身】`
+    : energyCost >= 50 ? "【高强度：精力充足时回报更高】" : "";
+  const masteryNote = mastery ? `【技能「${mastery.name}」Lv${mastery.level}：做熟悉的事更稳】` : "";
 
   return {
     intent,
     tier,
     deltas,
-    mechanical: `「${intent.summary}」→ ${TIER_LABELS[tier]}（判定属性：${ATTR_LABELS[intent.attr]}）${worldMult !== 1 ? `【世界趋势×${worldMult.toFixed(2)}】` : ""}${describeDeltas(deltas)}`,
+    mechanical: `「${intent.summary}」→ ${TIER_LABELS[tier]}（判定属性：${ATTR_LABELS[intent.attr]}）${worldMult !== 1 ? `【世界趋势×${worldMult.toFixed(2)}】` : ""}${energyNote}${masteryNote}${describeDeltas(deltas)}`,
   };
 }
 
@@ -282,7 +311,7 @@ export function applyDeltas(state: GameState, deltas: StatDeltas): void {
   const c = state.character;
   for (const [k, v] of Object.entries(deltas.attrs)) {
     const key = k as AttrKey;
-    c.attrs[key] = clamp(c.attrs[key] + (v ?? 0), 0, 100);
+    deltas.attrs[key] = applyBoundedAttributeDelta(c, key, v ?? 0);
   }
   c.energy = clamp(c.energy + deltas.energy, 0, 100);
   c.money = Math.round(c.money + deltas.money);
@@ -295,13 +324,16 @@ export function applyDeltas(state: GameState, deltas: StatDeltas): void {
       c.skills.push(skill);
     }
     skill.xp += gain.xp;
-    while (skill.xp >= 100 && skill.level < 10) {
-      skill.xp -= 100;
+    // 升级门槛随等级递增：入门快、大师慢
+    while (skill.xp >= xpToNext(skill.level) && skill.level < 10) {
+      skill.xp -= xpToNext(skill.level);
       skill.level += 1;
     }
   }
   for (const a of deltas.affinity) {
-    const npc = c.npcs.find((n) => n.name === a.npcName || n.relation.includes(a.npcName));
+    const aliases: Record<string, string> = { 爸爸: "父亲", 爸: "父亲", 妈妈: "母亲", 妈: "母亲" };
+    const target = aliases[a.npcName] ?? a.npcName;
+    const npc = c.npcs.find((n) => n.name === target || n.relation.includes(target));
     if (npc) npc.affinity = clamp(npc.affinity + a.delta, -100, 100);
   }
 }
@@ -323,7 +355,7 @@ export function describeDeltas(d: StatDeltas): string {
 
 const CATEGORY_KEYWORDS: [ActionCategory, AttrKey, RegExp][] = [
   ["study", "intelligence", /学习|读书|复习|看书|上课|背|刷题|考/],
-  ["work", "eq", /工作|上班|打工|兼职|加班|赚钱|搬砖/],
+  ["work", "eq", /工作|上班|打工|兼职|加班|赚钱|搬砖|求职|应聘|面试|入职|跳槽|升职|晋升|辞职/],
   ["exercise", "fitness", /锻炼|跑步|健身|运动|打球|游泳|爬山/],
   ["romance", "charm", /表白|约会|恋爱|追求|相亲|求婚/],
   ["social", "eq", /朋友|聚会|社交|聊天|拜访|应酬|认识/],
@@ -332,6 +364,13 @@ const CATEGORY_KEYWORDS: [ActionCategory, AttrKey, RegExp][] = [
   ["adventure", "luck", /冒险|赌|探险|旅行|尝试|挑战/],
   ["leisure", "mood", /玩|游戏|娱乐|电影|听歌|放松|逛/],
 ];
+
+function fallbackTarget(text: string): string | undefined {
+  const match = text.match(
+    /(?:和|找|约|陪|认识|结识|追求|向)([\u4e00-\u9fff·]{2,6}?)(?=聊天|见面|吃饭|约会|表白|求婚|玩|$)/,
+  );
+  return match?.[1];
+}
 
 export function fallbackParseIntents(text: string): ActionIntent[] {
   const parts = text
@@ -352,6 +391,7 @@ export function fallbackParseIntents(text: string): ActionIntent[] {
       risk: risky ? "high" : "low",
       attr,
       nsfw: false,
+      target: category === "social" || category === "romance" ? fallbackTarget(p) : undefined,
     } satisfies ActionIntent;
   });
 }

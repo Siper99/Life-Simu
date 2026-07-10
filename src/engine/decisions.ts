@@ -1,15 +1,17 @@
 import { Rng } from "./rng";
+import { TRACK_SKILLS, skillTierLabel } from "./skills";
 import {
   ActionCategory,
   ActionIntent,
   AttrKey,
   GameState,
   LifeStage,
+  Skill,
   ageOf,
   lifeStageOf,
 } from "./types";
 
-export type ChoiceKind = "daily" | "relationship" | "opportunity" | "director" | "recovery" | "llm";
+export type ChoiceKind = "daily" | "intense" | "relationship" | "opportunity" | "director" | "recovery" | "context" | "llm";
 
 export interface DecisionChoice {
   id: string;
@@ -19,6 +21,7 @@ export interface DecisionChoice {
   categoryLabel: string;
   timeCost: number;
   energyCost: number;
+  moneyCost?: number; // 显性花费：卡面标价，结算时无论成败都扣
   consequences: string[];
   expiresIn?: number;
   directorNote?: string;
@@ -68,6 +71,7 @@ interface ChoiceDraft {
   attr: AttrKey;
   timeCost: number;
   energyCost: number;
+  moneyCost?: number;
   risk?: ActionIntent["risk"];
   skill?: string; // 这张卡积累的技能名（缺省由引擎按类别/关键词推断）
   consequences: string[];
@@ -291,6 +295,7 @@ export function worldModifierFor(state: GameState, category: ActionCategory): nu
 function hoursPerBlock(state: GameState): number {
   if (state.granularity === "week") return 14;
   if (state.granularity === "month") return 56;
+  if (state.granularity === "season") return 160;
   return 420;
 }
 
@@ -303,6 +308,7 @@ function toChoice(state: GameState, draft: ChoiceDraft, kind: ChoiceKind = "dail
     categoryLabel: CATEGORY_LABELS[draft.category],
     timeCost: draft.timeCost,
     energyCost: draft.energyCost,
+    moneyCost: draft.moneyCost,
     consequences: draft.consequences,
     intent: {
       id: `choice-${draft.id}`,
@@ -314,21 +320,176 @@ function toChoice(state: GameState, draft: ChoiceDraft, kind: ChoiceKind = "dail
       attr: draft.attr,
       nsfw: false,
       skill: draft.skill,
+      moneyCost: draft.moneyCost,
     },
   };
 }
 
+// ---------- 角色气质：同一个角色一生稳定、不同角色各不相同的「个人特长」 ----------
+
+const HOBBY_POOL = ["绘画", "乐器", "棋艺", "舞蹈", "手工", "书法"];
+const CRAFT_POOL = ["编程", "设计", "写作", "外语", "理财", "摄影"];
+
+function personaPick(state: GameState, pool: string[], salt: number): string {
+  return pool[(Math.imul(state.seed ^ salt, 2654435761) >>> 0) % pool.length];
+}
+
+/** 模糊卡个性化：把「才艺」「专业技能」这类占位词换成这个角色自己的东西 */
+function personalizeDraft(state: GameState, draft: ChoiceDraft): ChoiceDraft {
+  if (draft.skill === "才艺") {
+    const hobby = personaPick(state, HOBBY_POOL, 0x51);
+    const existing = state.character.skills.find((s) => s.name === hobby);
+    return {
+      ...draft,
+      skill: hobby,
+      title: draft.id === "hobby" ? `把「${hobby}」练出样子` : draft.id === "oldhobby" ? `捡回搁置多年的${hobby}` : draft.title,
+      description: draft.id === "hobby"
+        ? existing ? `${hobby}已经${skillTierLabel(existing.level)}，从笨拙到像样只差坚持。` : `从笨拙开始，把${hobby}变成自己的东西。`
+        : draft.description,
+    };
+  }
+  if (draft.skill === "专业技能") {
+    const craft = TRACK_SKILLS[state.character.identity.job?.track ?? ""] ?? personaPick(state, CRAFT_POOL, 0xc7);
+    return { ...draft, skill: craft, title: `下班后死磕${craft}`, description: `牺牲眼前的轻松，把${craft}磨成下一次跳跃的资本。` };
+  }
+  return draft;
+}
+
+// ---------- 情境卡：从当前处境里长出来的卡，引用真实的人、技能和数字 ----------
+
+const SKILL_CAT_ACTION: Record<Skill["category"], { category: ActionCategory; attr: AttrKey }> = {
+  学业: { category: "study", attr: "intelligence" },
+  职业: { category: "work", attr: "eq" },
+  爱好: { category: "leisure", attr: "mood" },
+  生活: { category: "leisure", attr: "mood" },
+};
+
+function contextualChoices(state: GameState, rng: Rng): DecisionChoice[] {
+  const c = state.character;
+  const age = ageOf(state);
+  const candidates: DecisionChoice[] = [];
+  const push = (draft: ChoiceDraft, target?: string) => {
+    const choice = toChoice(state, draft, "context");
+    if (target) choice.intent.target = target;
+    candidates.push(choice);
+  };
+
+  // 财务危机：欠钱是最要紧的事
+  if (age >= 16 && c.money < 0) {
+    push({
+      id: "ctx-debt", title: "先把窟窿补上",
+      description: `欠着 ${Math.abs(c.money).toLocaleString()} 的日子睡不安稳，接点活先止血。`,
+      category: "work", attr: "eq", timeCost: 1, energyCost: 24,
+      consequences: ["缓解财务压力", "占用发展时间"],
+    });
+  }
+
+  // 牵挂：在乎的人健康亮了红灯
+  const ailing = c.npcs
+    .filter((n) => n.alive && n.birthYear <= state.world.year && n.health < 45 && n.affinity > 0)
+    .sort((a, b) => a.health - b.health)[0];
+  if (ailing && age >= 8) {
+    push({
+      id: `ctx-care-${ailing.id}`, title: `陪${ailing.name}去趟医院`,
+      description: `${ailing.relation}的健康只剩 ${ailing.health}，有些事不能再拖了。`,
+      category: "social", attr: "eq", timeCost: 1, energyCost: 14,
+      consequences: [`${ailing.name}好感提升`, "花时间也花心力"],
+    }, ailing.name);
+  }
+
+  // 裂痕：至亲或伴侣的关系跌破冰点
+  const estranged = c.npcs
+    .filter((n) => n.alive && n.birthYear <= state.world.year && n.affinity < 15 && /父亲|母亲|哥哥|姐姐|弟弟|妹妹|配偶|恋人/.test(n.relation))
+    .sort((a, b) => a.affinity - b.affinity)[0];
+  if (estranged && age >= 8) {
+    push({
+      id: `ctx-mend-${estranged.id}`, title: `和${estranged.name}把话说开`,
+      description: `${estranged.relation}的好感只剩 ${estranged.affinity}。再僵下去，这个家会越来越安静。`,
+      category: "social", attr: "eq", timeCost: 1, energyCost: 16,
+      consequences: ["修复一段血缘", "旧账可能翻出来"],
+    }, estranged.name);
+  }
+
+  // 磨砺：练得最深的技能值得再进一层
+  const top = [...c.skills].sort((a, b) => b.level - a.level || b.xp - a.xp)[0];
+  if (top && top.level >= 2 && top.level < 10) {
+    const map = SKILL_CAT_ACTION[top.category];
+    push({
+      id: `ctx-hone-${top.name}`, title: `把「${top.name}」再磨一层`,
+      description: `${skillTierLabel(top.level)}到${skillTierLabel(top.level + 1)}之间，隔着一段没人能替你走的路。`,
+      category: map.category, attr: map.attr, timeCost: 1, energyCost: 22, skill: top.name,
+      consequences: [`「${top.name}」经验大涨`, "其他安排让位"],
+    });
+  }
+
+  // 花钱办事的基准量级（与 resolver.moneyScale 同口径，避免循环依赖就地计算）
+  const spendScale = c.identity.job
+    ? Math.max(80, c.identity.job.weeklyPay * 0.5)
+    : age < 18 ? 40 : 300;
+
+  // 报班：花钱请人指路，比闷头摸索快得多（技能经验 ×2.5，钱无论成败都花出去）
+  const tuition = Math.round(spendScale * 3);
+  if (age >= 16 && top && top.level >= 1 && top.level < 10 && c.money >= tuition * 1.5) {
+    const map = SKILL_CAT_ACTION[top.category];
+    push({
+      id: `ctx-course-${top.name}`, title: `给「${top.name}」报个班`,
+      description: `花 ${tuition.toLocaleString()} 请人指路，比自己闷头摸索快得多。`,
+      category: map.category, attr: map.attr, timeCost: 1, energyCost: 20,
+      moneyCost: tuition, skill: top.name,
+      consequences: [`「${top.name}」经验×2.5`, `花费 ${tuition.toLocaleString()}`],
+    });
+  }
+
+  // 就医：健康亮红灯或上了年纪，花钱把身体修回来（健康恢复 ×2）
+  const medical = Math.round(spendScale * 2);
+  if (age >= 18 && (c.attrs.health < 55 || age >= 60) && c.money >= medical) {
+    push({
+      id: "ctx-medical", title: "认真做一次体检调理",
+      description: `花 ${medical.toLocaleString()} 买个明白：把隐患查出来，把身体养回来。`,
+      category: "health", attr: "health", timeCost: 1, energyCost: -12,
+      moneyCost: medical,
+      consequences: ["健康恢复翻倍", `花费 ${medical.toLocaleString()}`],
+    });
+  }
+
+  // 闲钱：趴着不动的钱在贬值
+  if (age >= 18 && c.money > 30000) {
+    push({
+      id: "ctx-idle-money", title: "让闲钱出去干活",
+      description: `账上躺着 ${c.money.toLocaleString()}。放着是安全感，动起来才是机会。`,
+      category: "finance", attr: "intelligence", timeCost: 1, energyCost: 16, risk: "high",
+      consequences: ["财富可能增长", "也可能交学费"],
+    });
+  }
+
+  // 线头回响：叙事埋下的伏笔，引擎自己也接得住（离线时是唯一的回应通道）
+  const hook = [...state.hooks].reverse().find((h) => state.turn - h.turn <= 4);
+  if (hook) {
+    push({
+      id: `ctx-hook-${hook.id}`, title: hook.text.slice(0, 12),
+      description: `这件事还悬着：${hook.text}。线头不去接，就会自己断掉。`,
+      category: "adventure", attr: "luck", timeCost: 1, energyCost: 15,
+      consequences: ["回应一段伏笔", "结果未必如愿"],
+    });
+  }
+
+  return rng.sample(candidates, Math.min(2, candidates.length));
+}
+
 function relationshipChoice(state: GameState): DecisionChoice {
   const npc = state.character.npcs
-    .filter((item) => item.alive)
+    .filter((item) => item.alive && item.birthYear <= state.world.year)
     .sort((a, b) => b.affinity - a.affinity)[0];
   const target = npc?.name ?? "身边的人";
   const relation = npc?.relation ?? "关系";
+  const npcDetail = npc
+    ? `${relation}，${state.world.year - npc.birthYear}岁，${npc.occupation ?? "无职业"}，健康${npc.health}`
+    : relation;
   const category: ActionCategory = ageOf(state) >= 16 && state.character.identity.maritalStatus === "恋爱中" ? "romance" : "social";
   const choice = toChoice(state, {
     id: `with-${npc?.id ?? "someone"}`,
     title: `把时间留给${target}`,
-    description: `${relation}不会永远停在原地。见面、倾听，也让对方的人生继续发生。`,
+    description: `${npcDetail}。关系不会永远停在原地，见面和倾听也会改变彼此。`,
     category,
     attr: category === "romance" ? "charm" : "eq",
     timeCost: 1,
@@ -350,6 +511,42 @@ function recoveryChoice(state: GameState): DecisionChoice {
     energyCost: -24,
     consequences: ["恢复精力", "心境或健康改善"],
   }, "recovery");
+}
+function intenseChoice(state: GameState): DecisionChoice {
+  const stage = lifeStageOf(ageOf(state));
+  const config: Record<LifeStage, ChoiceDraft> = {
+    婴儿: {
+      id: "all-in-growth", title: "用整年学走路和说话", description: "把这一年的大部分力气都用在最关键的发育上。",
+      category: "study", attr: "intelligence", timeCost: 2, energyCost: 45,
+      consequences: ["成长收益显著提高", "几乎没有其他安排"],
+    },
+    童年: {
+      id: "all-in-training", title: "参加一季强化训练", description: "连续三个月围绕一个目标训练，成果和疲惫都会很明显。",
+      category: "study", attr: "intelligence", timeCost: 2, energyCost: 55, risk: "high", skill: "才艺",
+      consequences: ["高强度高成长", "下一季可能需要休整"],
+    },
+    少年: {
+      id: "all-in-exam", title: "把这一季押给冲刺", description: "暂停大部分娱乐，把时间和体力集中到一个关键目标。",
+      category: "study", attr: "intelligence", timeCost: 2, energyCost: 65, risk: "high",
+      consequences: ["可能实现明显跃升", "健康与关系承压"],
+    },
+    青年: {
+      id: "all-in-career", title: "进行一次事业总攻", description: "用三个月完成平时半年才敢碰的目标，赌一次跃迁。",
+      category: "work", attr: "eq", timeCost: 2, energyCost: 70, risk: "high",
+      consequences: ["高回报职业机会", "失败会严重透支"],
+    },
+    中年: {
+      id: "all-in-project", title: "扛下决定性项目", description: "把经验、声誉和体力一起押上，争取改变当前位置。",
+      category: "work", attr: "eq", timeCost: 2, energyCost: 65, risk: "high",
+      consequences: ["职位与收入跃升机会", "健康和家庭承压"],
+    },
+    老年: {
+      id: "all-in-wish", title: "完成一件长久心愿", description: "趁身体还允许，用一季去做那件一直推迟的事。",
+      category: "adventure", attr: "health", timeCost: 2, energyCost: 50, risk: "high",
+      consequences: ["留下重要人生记忆", "身体恢复更慢"],
+    },
+  };
+  return toChoice(state, personalizeDraft(state, config[stage]), "intense");
 }
 
 function opportunityChoice(state: GameState, world: WorldPulse): DecisionChoice | null {
@@ -439,7 +636,9 @@ export function sanitizeLlmChoices(state: GameState, raw: unknown): DecisionChoi
     const category: ActionCategory = validCategory(r.category) ? r.category : "other";
     const attr = VALID_ATTRS.has(String(r.attr)) ? (r.attr as AttrKey) : "mood";
     const timeCost = Number(r.timeCost) === 2 ? 2 : 1;
-    const energyCost = clamp(Math.round(Number(r.energyCost) || 15), -25, 40);
+    const energyCost = clamp(Math.round(Number(r.energyCost) || 15), -25, 70);
+    // 显性花费不能超过角色现有的钱：LLM 不许开出付不起的价
+    const moneyCost = clamp(Math.round(Number(r.moneyCost) || 0), 0, Math.max(0, state.character.money));
     const risk: ActionIntent["risk"] = r.risk === "high" && !riskUsed ? "high" : "low";
     if (risk === "high") riskUsed = true; // 每批至多一张高危卡
     const consequences = Array.isArray(r.consequences)
@@ -454,6 +653,7 @@ export function sanitizeLlmChoices(state: GameState, raw: unknown): DecisionChoi
       categoryLabel: CATEGORY_LABELS[category],
       timeCost,
       energyCost,
+      moneyCost: moneyCost > 0 ? moneyCost : undefined,
       consequences,
       intent: {
         id,
@@ -466,6 +666,7 @@ export function sanitizeLlmChoices(state: GameState, raw: unknown): DecisionChoi
         nsfw: false,
         target: r.target ? String(r.target).slice(0, 20) : undefined,
         skill: r.skill ? String(r.skill).trim().slice(0, 6) : undefined,
+        moneyCost: moneyCost > 0 ? moneyCost : undefined,
       },
     });
   }
@@ -492,27 +693,33 @@ export function getDecisionBoard(state: GameState, extraChoices: DecisionChoice[
   const director = readDirector(state);
   const stage = lifeStageOf(ageOf(state));
   const rng = Rng.fromState(((state.seed ^ Math.imul(state.turn + 1, 2654435761)) >>> 0) || 1);
-  const daily = rng.sample(STAGE_POOL[stage], Math.min(4, STAGE_POOL[stage].length)).map((item) => toChoice(state, item));
+  // 情境卡用独立随机序列：LLM 卡异步到达后重算看板时，日常卡的抽样不能被扰动
+  const ctxRng = Rng.fromState(((state.seed ^ Math.imul(state.turn + 7, 40503)) >>> 0) || 1);
+  const daily = rng
+    .sample(STAGE_POOL[stage], Math.min(3, STAGE_POOL[stage].length))
+    .map((item) => toChoice(state, personalizeDraft(state, item)));
   const opportunity = opportunityChoice(state, world);
   const injected = directorChoice(state, director);
   const choices = [
     ...(injected ? [injected] : []),
     ...(opportunity ? [opportunity] : []),
-    ...extraChoices, // LLM 补充卡紧随机会卡，位置醒目
-    ...daily,
+    intenseChoice(state),
+    recoveryChoice(state), // 精力系统的托底项必须始终可见
     relationshipChoice(state),
-    recoveryChoice(state),
+    ...contextualChoices(state, ctxRng), // 情境卡：从当前处境长出来的个性化选项
+    ...extraChoices, // LLM 补充卡紧随其后，位置醒目
+    ...daily, // 通用日常卡垫底，被个性化内容挤掉也无妨
   ];
   const seen = new Set<string>();
   const deduped = choices.filter((c) => (seen.has(c.id) ? false : (seen.add(c.id), true)));
-  const unitLabel = state.granularity === "week" ? "周" : state.granularity === "month" ? "个月" : "年";
+  const unitLabel = state.granularity === "season" ? "季" : state.granularity === "week" ? "周" : state.granularity === "month" ? "个月" : "年";
   return {
     timeBudget: 3,
-    timeLabel: state.granularity === "week" ? "本周时间" : state.granularity === "month" ? "本月重心" : "这一年",
+    timeLabel: state.granularity === "season" ? "本季重心" : state.granularity === "week" ? "本周时间" : state.granularity === "month" ? "本月重心" : "这一年",
     headline: boardHeadline(state, world, unitLabel),
     world,
     director,
-    choices: deduped.slice(0, 10),
+    choices: deduped.slice(0, 11),
   };
 }
 
@@ -524,5 +731,7 @@ export function selectionError(state: GameState, board: DecisionBoard, ids: stri
   if (time > board.timeBudget) return `时间不够：需要 ${time} 格，只有 ${board.timeBudget} 格`;
   const energy = selected.reduce((sum, choice) => sum + Math.max(0, choice.energyCost), 0);
   if (energy > state.character.energy) return `精力不够：需要 ${energy}，当前只有 ${state.character.energy}`;
+  const money = selected.reduce((sum, choice) => sum + (choice.moneyCost ?? 0), 0);
+  if (money > Math.max(0, state.character.money)) return `钱不够：需要 ${money.toLocaleString()}，手头只有 ${Math.max(0, state.character.money).toLocaleString()}`;
   return null;
 }

@@ -7,10 +7,12 @@ import { appendWeeklyNote } from "../engine/memory";
 import { DecisionBoard, DecisionChoice, getDecisionBoard, selectionError } from "../engine/decisions";
 import { SWING_EASE_LEVELS, judgeSwing as engineJudgeSwing } from "../engine/resolver";
 import { beginTurn, fastForward, finalizeTurn, TurnOutcome } from "../engine/turn";
+import { LIFESTYLES } from "../engine/economy";
 import {
   ATTR_LABELS,
   AttrKey,
   GameState,
+  LifestyleKey,
   SwingVerdict,
   Talent,
   TIER_LABELS,
@@ -70,6 +72,8 @@ interface Store {
   llmChoices: LlmChoiceBatch | null; // 本回合的 LLM 补充行动卡
   lastError: string | null;
   genderPref: GenderPref; // 开局性别偏好：随机/男/女
+  backing: boolean; // 本回合是否动用人脉护航（提交后自动复位）
+  devOpen: boolean; // 开发者面板
 
   init: () => Promise<void>;
   setScreen: (s: Screen) => void;
@@ -83,6 +87,13 @@ interface Store {
   loadSave: (id: string) => Promise<void>;
   deleteSave: (id: string) => Promise<void>;
 
+  setBacking: (v: boolean) => void;
+  setLifestyle: (k: LifestyleKey) => void;
+  toggleDev: () => void;
+  /** 开发者模式：直接改写引擎真值。note 传入时写系统日志并立即落盘，否则关面板时统一落盘 */
+  devMutate: (fn: (g: GameState) => void, note?: string) => void;
+  devSkipTurns: (turns: number) => Promise<void>; // 瞬时快进 N 回合（不走 LLM 叙事）
+  devSkipToYear: (year: number) => Promise<void>; // 瞬时快进到指定年份
   submitTurn: (text: string) => Promise<void>;
   submitChoices: (choiceIds: string[]) => Promise<void>;
   judgeSwing: (offset: number) => SwingVerdict | null; // 停针瞬间：判定+豁免掷点，返回最终结论供演出
@@ -107,6 +118,56 @@ export const useStore = create<Store>((set, get) => ({
   llmChoices: null,
   lastError: null,
   genderPref: "random",
+  backing: false,
+  devOpen: false,
+
+  setBacking: (backing) => set({ backing }),
+
+  toggleDev: () => {
+    const { devOpen, game } = get();
+    if (devOpen && game) void persist.saveGame(game); // 关面板时把面板里的改动落盘
+    set({ devOpen: !devOpen });
+  },
+
+  devMutate: (fn, note) => {
+    const { game } = get();
+    if (!game) return;
+    fn(game);
+    if (note) {
+      game.log.push({ turn: game.turn, date: formatDate(game), kind: "system", text: note });
+    }
+    game.updatedAt = Date.now();
+    set({ game: touch(game) });
+    if (note) void persist.saveGame(game);
+  },
+
+  devSkipTurns: async (turns) => {
+    await devAdvance(set, get, (game) => {
+      fastForward(game, turns);
+    });
+  },
+
+  devSkipToYear: async (year) => {
+    await devAdvance(set, get, (game) => {
+      let guard = 0;
+      // 一回合一回合推进：粒度切换（年→季）也能精确停在目标年份
+      while (game.world.year < year && !game.ended && guard++ < 600) fastForward(game, 1);
+    });
+  },
+
+  setLifestyle: (k) => {
+    const { game } = get();
+    if (!game || game.ended || game.character.lifestyle === k) return;
+    game.character.lifestyle = k;
+    game.log.push({
+      turn: game.turn,
+      date: formatDate(game),
+      kind: "system",
+      text: `生活方式调整为「${LIFESTYLES[k].label}」：${LIFESTYLES[k].desc}`,
+    });
+    set({ game: touch(game) });
+    void persist.saveGame(game);
+  },
 
   init: async () => {
     const settings = await persist.loadSettings();
@@ -200,7 +261,8 @@ export const useStore = create<Store>((set, get) => ({
 
     try {
       const { intents } = await parseIntents(settings, game, text);
-      const pending = beginTurn(game, text, intents, SWING_EASE_LEVELS[settings.swingDifficulty]);
+      const pending = beginTurn(game, text, intents, SWING_EASE_LEVELS[settings.swingDifficulty], { connections: get().backing });
+      set({ backing: false });
       game.pending = pending;
       // 必须先把 pending 同步进 store：finishTurn 内部用 get() 重新取 game，
       // 如果这里不 touch，它拿到的还是上一次 set 时的旧引用，pending 为空会静默 return，
@@ -244,7 +306,8 @@ export const useStore = create<Store>((set, get) => ({
     if (game.decisionHistory.length > 24) game.decisionHistory = game.decisionHistory.slice(-24);
 
     try {
-      const pending = beginTurn(game, text, intents, SWING_EASE_LEVELS[settings.swingDifficulty]);
+      const pending = beginTurn(game, text, intents, SWING_EASE_LEVELS[settings.swingDifficulty], { connections: get().backing });
+      set({ backing: false });
       game.pending = pending;
       set({ game: touch(game) });
       if (pending.checks.length > 0) {
@@ -293,7 +356,7 @@ export const useStore = create<Store>((set, get) => ({
     if (!game || game.ended || phase !== "idle") return;
     set({ phase: "narrating", lastError: null });
 
-    const unit = game.granularity === "week" ? "周" : game.granularity === "month" ? "个月" : "年";
+    const unit = game.granularity === "season" ? "季" : game.granularity === "week" ? "周" : game.granularity === "month" ? "个月" : "年";
     const spanLabel = spanLabelIn ?? (turns === 1 ? `这一${unit}` : `${turns}${unit}`);
     const notes = fastForward(game, turns);
     // 跳过也有内容：把被动变化（收支/健康/时代事件）写成一段岁月摘要
@@ -312,6 +375,24 @@ export const useStore = create<Store>((set, get) => ({
 
 type Set = (partial: Partial<Store>) => void;
 type Get = () => Store;
+
+/** 开发者快进的公共收口：瞬时结算、写一条 DEV 日志、处理死亡、刷新灵感卡并落盘 */
+async function devAdvance(set: Set, get: Get, run: (game: GameState) => void): Promise<void> {
+  const { game, phase } = get();
+  if (!game || game.ended || phase !== "idle") return;
+  const before = formatDate(game);
+  run(game);
+  game.log.push({
+    turn: game.turn,
+    date: formatDate(game),
+    kind: "system",
+    text: `【DEV】时间快进：${before} → ${formatDate(game)}`,
+  });
+  set({ game: touch(game) });
+  if (game.ended) await handleDeath(set, get);
+  refreshLlmChoices(set, get);
+  await persist.saveGame(game);
+}
 
 /**
  * 请求 LLM 为当前回合补充行动卡（异步，不阻塞决策盘展示）。

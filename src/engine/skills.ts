@@ -1,8 +1,10 @@
 // 技能命名真值：技能必须是可长期积累的「手艺名词」（木工/吉他/编程/厨艺），
-// 不是行动描述——"扶着家具探索"是一件事，不是一门技能。
+// 不是行动描述——"扶着家具探索"是一件事，不是一门技能；也不是学段标签——
+// "小学课业"会过时，"学识"跟人一辈子。
 // 推断优先级：意图自带的 skill 字段（LLM/卡片给出）→ 关键词词典 → 类别兜底 → 不积累。
+// 技能不只是展示：熟练度会降低相关行动的判定难度、提高工作与理财的收入（见 turn/resolver）。
 
-import { ActionCategory, ActionIntent, GameState, Skill, ageOf } from "./types";
+import { ActionCategory, ActionIntent, GameState, Skill, ageOf, clamp } from "./types";
 
 /** 行动类别 → 技能归类（无技能可积累的类别为 null） */
 const CATEGORY_SKILL_CAT: Record<ActionCategory, Skill["category"] | null> = {
@@ -30,6 +32,8 @@ const KEYWORD_SKILLS: [RegExp, string, Skill["category"]][] = [
   [/篮球|足球|羽毛球|乒乓|排球|打球/, "球类", "爱好"],
   [/跑步|健身|游泳|撸铁|骑行|爬山/, "体能", "生活"],
   [/外语|英语|日语|口语|单词/, "外语", "学业"],
+  [/数学|奥数|物理|化学|生物|竞赛题|理科/, "数理", "学业"],
+  [/历史|地理|哲学|文学|诗词|国学|文科/, "人文", "学业"],
   [/驾驶|开车|考驾照/, "驾驶", "生活"],
   [/摄影|拍照|拍视频|剪辑/, "摄影", "爱好"],
   [/围棋|象棋|棋|牌技/, "棋艺", "爱好"],
@@ -37,14 +41,23 @@ const KEYWORD_SKILLS: [RegExp, string, Skill["category"]][] = [
   [/演讲|谈判|销售|带货/, "口才", "职业"],
 ];
 
-/** 学业技能按人生阶段归一化命名，避免每个学期各建一个技能 */
-function studySkillName(state: GameState): string {
-  const age = ageOf(state);
-  if (age < 12) return "小学课业";
-  if (age < 15) return "初中课业";
-  if (age < 18) return "高中课业";
-  if (state.character.identity.schooling?.startsWith("大学")) return "大学学业";
-  return "自学";
+/** 职业赛道 → 对应手艺：在岗位上磨的是真本事，不是笼统的「职场」 */
+export const TRACK_SKILLS: Record<string, string> = {
+  医疗: "医术",
+  技术: "编程",
+  教育: "教学",
+  法律: "法务",
+  销售: "销售",
+  设计: "设计",
+  餐饮: "厨艺",
+  公职: "公文",
+  金融: "金融",
+};
+
+/** 工作类兜底：有职业按赛道给手艺名，没职业才落到「职场」（求职、零工的通用经验） */
+function workSkillName(state: GameState): string {
+  const track = state.character.identity.job?.track;
+  return (track && TRACK_SKILLS[track]) ?? "职场";
 }
 
 /**
@@ -71,9 +84,9 @@ export function skillForIntent(
   // 3) 类别兜底：只有明确「在练什么」的类别才给
   switch (intent.category) {
     case "study":
-      return { name: studySkillName(state), category: "学业" };
+      return { name: "学识", category: "学业" }; // 不分学段：读的书都长在同一个人身上
     case "work":
-      return { name: "职场", category: "职业" };
+      return { name: workSkillName(state), category: "职业" };
     case "exercise":
       return { name: "体能", category: "生活" };
     case "finance":
@@ -81,4 +94,35 @@ export function skillForIntent(
     default:
       return null; // 玩乐/社交/恋爱/冒险没点名手艺就不长技能
   }
+}
+
+/** 这次行动能吃到的已有熟练度（0~10）：做熟悉的事更稳、更值钱 */
+export function skillMasteryFor(
+  state: GameState,
+  intent: ActionIntent,
+): { name: string; level: number } | null {
+  const trained = skillForIntent(state, intent);
+  if (!trained) return null;
+  const skill = state.character.skills.find((s) => s.name === trained.name);
+  if (!skill || skill.level <= 0) return null;
+  return { name: skill.name, level: skill.level };
+}
+
+/** 熟练度对判定难度的减免：Lv10 大师做本行的事，难度 -30 */
+export function masteryDifficultyBonus(state: GameState, intent: ActionIntent): number {
+  return (skillMasteryFor(state, intent)?.level ?? 0) * 3;
+}
+
+/** 升级所需经验随等级递增：入门快、精通慢，大师是一生的事 */
+export function xpToNext(level: number): number {
+  return 60 + clamp(level, 0, 10) * 40;
+}
+
+/** 技能段位：等级的语义化标签，UI 与叙事共用 */
+export function skillTierLabel(level: number): string {
+  if (level >= 8) return "大师";
+  if (level >= 5) return "精通";
+  if (level >= 3) return "熟练";
+  if (level >= 1) return "入门";
+  return "生疏";
 }

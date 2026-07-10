@@ -31,3 +31,6 @@ src-tauri/gen/schemas
 *.njsproj
 *.sln
 *.sw?
+
+# 浏览器调试工具产物
+.playwright-cli/

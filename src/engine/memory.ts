@@ -1,6 +1,7 @@
 // 分层记忆：本周详情 → 月度摘要 → 年度编年史。组装 LLM 上下文时按层拼接。
 
-import { ATTR_LABELS, AttrKey, GameState, ageOf, formatDate, lifeStageOf } from "./types";
+import { LIFESTYLES, lifestyleOf } from "./economy";
+import { ATTR_LABELS, AttrKey, GameState, ageOf, energyStateLabel, formatDate, lifeStageOf } from "./types";
 
 const MAX_WEEKLY = 12;
 const MAX_MONTHLY = 24;
@@ -34,13 +35,25 @@ export function statusCard(state: GameState): string {
   const c = state.character;
   const age = ageOf(state);
   const attrs = (Object.keys(c.attrs) as AttrKey[])
-    .map((k) => `${ATTR_LABELS[k]}${c.attrs[k]}`)
+    .map((k) => `${ATTR_LABELS[k]}${c.attrs[k]}/潜力${c.attrBounds[k].ceiling}`)
+    .join(" ");
+  const baselines = (["health", "fitness", "intelligence", "eq", "charm"] as AttrKey[])
+    .map((k) => `${ATTR_LABELS[k]}${c.attrBounds[k].floor}`)
     .join(" ");
   const npcs = c.npcs
-    .filter((n) => n.alive)
+    .filter((n) => n.birthYear <= state.world.year)
+    .sort((a, b) => Number(b.alive) - Number(a.alive) || b.affinity - a.affinity)
     .slice(0, 10)
-    .map((n) => `${n.name}(${n.relation},好感${n.affinity})`)
+    .map((n) => {
+      const npcAge = state.world.year - n.birthYear;
+      const life = n.alive ? `${npcAge}岁,${n.occupation ?? "无职业"},健康${n.health}` : "已故";
+      return `${n.name}(${n.relation},${life},好感${n.affinity})`;
+    })
     .join("；");
+  const identities = [
+    c.identity.schooling ? `学籍${c.identity.schooling}` : "",
+    c.identity.job ? `职业${c.identity.job.title}@${c.identity.job.employer}` : "",
+  ].filter(Boolean).join("｜") || "无业";
   const skills = c.skills
     .filter((s) => s.level > 0)
     .sort((a, b) => b.level - a.level)
@@ -50,9 +63,10 @@ export function statusCard(state: GameState): string {
   return [
     `姓名：${c.name}（${c.gender}，${age}岁，${lifeStageOf(age)}期）`,
     `坐标：${c.identity.residence}｜家庭：${state.background.familyClass}`,
-    `属性：${attrs}`,
-    `精力：${c.energy}/100｜金钱：${c.money}｜人脉：${c.connections}`,
-    `身份：${c.identity.schooling ?? c.identity.job?.title ?? "无业"}｜婚恋：${c.identity.maritalStatus}${c.identity.conditions.length > 0 ? `｜状态：${c.identity.conditions.join("、")}` : ""}`,
+    `属性（100为人类极限）：${attrs}`,
+    `先天基线（伤病可跌破）：${baselines}`,
+    `精力：${c.energy}/100（${energyStateLabel(c.energy)}）｜金钱：${c.money}${age >= 18 ? `（${LIFESTYLES[lifestyleOf(state)].label}生活）` : ""}｜人脉：${c.connections}`,
+    `身份：${identities}｜婚恋：${c.identity.maritalStatus}${c.identity.conditions.length > 0 ? `｜状态：${c.identity.conditions.join("、")}` : ""}`,
     `天赋：${c.talents.map((t) => t.name).join("、") || "无"}`,
     skills ? `技能：${skills}` : "",
     npcs ? `关系：${npcs}` : "",

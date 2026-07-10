@@ -14,6 +14,7 @@ import {
 import { pickEvent, EVENT_TABLE } from "./events";
 import { beginTurn, finalizeTurn, fastForward } from "./turn";
 import { emptyDeltas, lifeStageOf, granularityOf } from "./types";
+import { attributeScaleLabel } from "./attributes";
 
 describe("Rng", () => {
   it("同种子序列可复现", () => {
@@ -35,10 +36,13 @@ describe("开局生成", () => {
   it("属性在合法范围内且给出三个天赋候选", () => {
     for (let seed = 1; seed <= 50; seed++) {
       const roll = rollGenesis(new Rng(seed));
-      for (const v of Object.values(roll.character.attrs)) {
-        expect(v).toBeGreaterThanOrEqual(1);
-        expect(v).toBeLessThanOrEqual(100);
+      for (const [key, value] of Object.entries(roll.character.attrs)) {
+        const range = roll.character.attrBounds[key as keyof typeof roll.character.attrs];
+        expect(value).toBeGreaterThanOrEqual(1);
+        expect(value).toBeLessThanOrEqual(range.ceiling);
+        expect(range.floor).toBeLessThanOrEqual(range.ceiling);
       }
+      expect(roll.character.attrs.intelligence).toBeLessThanOrEqual(14); // 新生儿是当前发育值，不是成人智力
       expect(roll.talentChoices).toHaveLength(3);
       expect(roll.character.npcs.length).toBeGreaterThanOrEqual(2); // 至少有父母
     }
@@ -95,8 +99,10 @@ describe("开局生成", () => {
     const { state } = newGameState(1);
     const talent = TALENT_POOL.find((t) => t.id === "genius")!;
     const before = state.character.attrs.intelligence;
+    const beforeCeiling = state.character.attrBounds.intelligence.ceiling;
     applyTalent(state.character, talent);
-    expect(state.character.attrs.intelligence).toBe(Math.min(100, before + 15));
+    expect(state.character.attrs.intelligence).toBe(Math.min(state.character.attrBounds.intelligence.ceiling, before + 15));
+    expect(state.character.attrBounds.intelligence.ceiling).toBeGreaterThanOrEqual(beforeCeiling);
     expect(state.character.talents).toContain(talent);
   });
 });
@@ -315,6 +321,9 @@ describe("决策盘", () => {
       const { state } = newGameState(seed);
       const board = getDecisionBoard(state);
       expect(board.choices.length).toBeGreaterThanOrEqual(6);
+      expect(board.choices.some((choice) => choice.kind === "intense" && choice.energyCost >= 45)).toBe(true);
+      expect(board.choices.some((choice) => choice.kind === "recovery")).toBe(true);
+      expect(board.timeLabel).toBe(state.granularity === "year" ? "这一年" : "本季重心");
       expect(getDecisionBoard(state).choices.map((c) => c.id)).toEqual(
         board.choices.map((c) => c.id),
       );
@@ -336,7 +345,7 @@ describe("决策盘", () => {
     const cards = sanitizeLlmChoices(state, raw);
     expect(cards).toHaveLength(2); // 无标题与非对象被丢弃，且只取前三条里合法的
     expect(cards[0].timeCost).toBe(1); // 9 → 1
-    expect(cards[0].energyCost).toBe(40); // 999 → 40
+    expect(cards[0].energyCost).toBe(70); // 999 → 70
     expect(cards[0].consequences).toHaveLength(3);
     expect(cards[1].energyCost).toBe(-25); // -100 → -25
     expect(cards[1].intent.risk).toBe("low"); // 第二张高危被降级
@@ -399,15 +408,29 @@ describe("技能定义：手艺名词而非行动描述", () => {
     risk: "low" as const, attr: "mood" as const, nsfw: false, ...over,
   });
 
-  it("学业按人生阶段归一化命名", async () => {
+  it("学习兜底是不过时的「学识」，关键词能认出学科", async () => {
     const { skillForIntent } = await import("./skills");
     const { state } = newGameState(11);
     state.world.year = state.character.birthYear + 10;
     expect(skillForIntent(state, mkIntent({ category: "study", summary: "认真读书" }))).toEqual(
-      { name: "小学课业", category: "学业" },
+      { name: "学识", category: "学业" },
     );
+    expect(skillForIntent(state, mkIntent({ category: "study", summary: "刷奥数竞赛题" }))?.name).toBe("数理");
     state.world.year = state.character.birthYear + 16;
-    expect(skillForIntent(state, mkIntent({ category: "study", summary: "刷题" }))?.name).toBe("高中课业");
+    expect(skillForIntent(state, mkIntent({ category: "study", summary: "背英语单词" }))?.name).toBe("外语");
+    // 不同学段的学习都长在同一门「学识」上，不再出现"小学课业"这类学段标签
+    expect(skillForIntent(state, mkIntent({ category: "study", summary: "认真读书" }))?.name).toBe("学识");
+  });
+
+  it("工作兜底按职业赛道映射成真手艺", async () => {
+    const { skillForIntent } = await import("./skills");
+    const { state } = newGameState(12);
+    state.world.year = state.character.birthYear + 26;
+    expect(skillForIntent(state, mkIntent({ category: "work", summary: "认真上班" }))?.name).toBe("职场");
+    state.character.identity.job = { title: "程序员", employer: "杭州·科技公司", weeklyHours: 40, weeklyPay: 1200, track: "技术", level: 1, xp: 0 };
+    expect(skillForIntent(state, mkIntent({ category: "work", summary: "认真上班" }))?.name).toBe("编程");
+    state.character.identity.job.track = "餐饮";
+    expect(skillForIntent(state, mkIntent({ category: "work", summary: "认真上班" }))?.name).toBe("厨艺");
   });
 
   it("关键词能认出具体手艺", async () => {
@@ -439,7 +462,7 @@ describe("技能定义：手艺名词而非行动描述", () => {
       id: "a", summary: "把功课做扎实做到深夜", category: "study", hours: 20,
       risk: "low", attr: "intelligence", nsfw: false,
     }, "success");
-    expect(study.deltas.skillXp[0].name).toBe("小学课业");
+    expect(study.deltas.skillXp[0].name).toBe("学识");
     const play = resolveAction(new Rng(2), state, {
       id: "b", summary: "反复摆弄一个玩具", category: "leisure", hours: 20,
       risk: "low", attr: "mood", nsfw: false,
@@ -477,6 +500,82 @@ describe("叙事线头解析", () => {
   });
 });
 
+describe("属性潜力、精力与季度节奏", () => {
+  it("先天基线和潜力随机化，100 明确代表人类极限", () => {
+    const intelligenceCaps = new Set<number>();
+    const fitnessFloors = new Set<number>();
+    for (let seed = 1; seed <= 80; seed++) {
+      const { character } = rollGenesis(new Rng(seed));
+      intelligenceCaps.add(character.attrBounds.intelligence.ceiling);
+      fitnessFloors.add(character.attrBounds.fitness.floor);
+      expect(character.attrs.intelligence).toBeLessThan(character.attrBounds.intelligence.ceiling);
+      expect(character.attrBounds.health.ceiling).toBeLessThanOrEqual(100);
+    }
+    expect(intelligenceCaps.size).toBeGreaterThan(8);
+    expect(fitnessFloors.size).toBeGreaterThan(6);
+    expect(attributeScaleLabel("intelligence", 100)).toContain("世界最聪明");
+  });
+
+  it("正向训练不能突破个人潜力，伤病仍可跌破先天基线", () => {
+    const { state } = newGameState(201);
+    const cap = state.character.attrBounds.fitness.ceiling;
+    state.character.attrs.fitness = cap - 1;
+    const gain = emptyDeltas();
+    gain.attrs.fitness = 20;
+    applyDeltas(state, gain);
+    expect(state.character.attrs.fitness).toBe(cap);
+    expect(gain.attrs.fitness).toBe(1);
+
+    const harm = emptyDeltas();
+    harm.attrs.fitness = -100;
+    applyDeltas(state, harm);
+    expect(state.character.attrs.fitness).toBe(0);
+    expect(state.character.attrs.fitness).toBeLessThan(state.character.attrBounds.fitness.floor);
+  });
+
+  it("儿童每季会从上课和自然发育中成长，一年只需四个回合", () => {
+    const { state } = newGameState(202);
+    state.world.year = state.character.birthYear + 6;
+    state.granularity = "season";
+    const yearBefore = state.world.year;
+    const intelligenceBefore = state.character.attrs.intelligence;
+    fastForward(state, 4);
+    expect(state.world.year).toBe(yearBefore + 1);
+    expect(state.character.attrs.intelligence).toBeGreaterThan(intelligenceBefore);
+    expect(state.character.attrs.intelligence).toBeLessThanOrEqual(state.character.attrBounds.intelligence.ceiling);
+  });
+
+  it("高精力投入有更高回报，精力不足时收益打折并伤身", () => {
+    const { state } = newGameState(203);
+    state.world.year = state.character.birthYear + 25;
+    state.character.energy = 100;
+    state.character.attrs.intelligence = 20;
+    state.character.attrBounds.intelligence.ceiling = 100;
+    const intent = {
+      id: "energy-test", summary: "集中学习编程", category: "study" as const, hours: 20,
+      risk: "low" as const, attr: "intelligence" as const, nsfw: false, skill: "编程",
+    };
+    const light = resolveAction(new Rng(9), state, { ...intent, energyCost: 12 }, "success");
+    const intense = resolveAction(new Rng(9), state, { ...intent, energyCost: 70 }, "success");
+    expect(intense.deltas.skillXp[0].xp).toBeGreaterThan(light.deltas.skillXp[0].xp);
+
+    state.character.energy = 5;
+    const overdrawn = resolveAction(new Rng(9), state, { ...intent, energyCost: 70 }, "success");
+    expect(overdrawn.deltas.attrs.health).toBeLessThan(0);
+    expect(overdrawn.mechanical).toContain("强行透支");
+  });
+
+  it("精力见底会在自然恢复前损害健康", () => {
+    const { state } = newGameState(204);
+    state.world.year = state.character.birthYear + 25;
+    state.granularity = "season";
+    state.character.energy = 0;
+    state.character.attrs.health = 60;
+    fastForward(state, 1);
+    expect(state.character.attrs.health).toBe(58);
+    expect(state.character.energy).toBeGreaterThan(0);
+  });
+});
 describe("数值应用", () => {
   it("属性变化封顶在 0-100", () => {
     const { state } = newGameState(20);
@@ -487,14 +586,269 @@ describe("数值应用", () => {
     expect(state.character.attrs.mood).toBe(100);
   });
 
-  it("技能经验累积升级", () => {
+  it("技能经验累积升级：门槛随等级递增", () => {
     const { state } = newGameState(21);
     const d = emptyDeltas();
     d.skillXp.push({ name: "吉他", category: "爱好", xp: 250 });
     applyDeltas(state, d);
     const skill = state.character.skills.find((s) => s.name === "吉他")!;
+    // 250 = 60（升Lv1）+ 100（升Lv2）+ 剩 90（Lv3 需要 140）
     expect(skill.level).toBe(2);
-    expect(skill.xp).toBe(50);
+    expect(skill.xp).toBe(90);
+  });
+});
+
+describe("技能熟练度：技能不再只是展示", () => {
+  it("升级门槛随等级递增，段位标签正确", async () => {
+    const { xpToNext, skillTierLabel } = await import("./skills");
+    expect(xpToNext(0)).toBe(60);
+    expect(xpToNext(5)).toBe(260);
+    expect(skillTierLabel(0)).toBe("生疏");
+    expect(skillTierLabel(1)).toBe("入门");
+    expect(skillTierLabel(3)).toBe("熟练");
+    expect(skillTierLabel(5)).toBe("精通");
+    expect(skillTierLabel(9)).toBe("大师");
+  });
+
+  it("熟练度直接抵扣高危判定难度", () => {
+    const mk = () => ({
+      id: "a", summary: "押上积蓄开吉他教室", category: "adventure" as const, hours: 30,
+      risk: "high" as const, attr: "luck" as const, nsfw: false, skill: "吉他",
+    });
+    const a = newGameState(42).state;
+    a.world.year = a.character.birthYear + 25;
+    const b = newGameState(42).state;
+    b.world.year = b.character.birthYear + 25;
+    b.character.skills.push({ id: "s", name: "吉他", category: "爱好", level: 5, xp: 0 });
+    const cold = beginTurn(a, "开吉他教室", [mk()]);
+    const warm = beginTurn(b, "开吉他教室", [mk()]);
+    expect(warm.checks[0].difficulty).toBe(cold.checks[0].difficulty - 15); // Lv5 × 3
+  });
+
+  it("熟练的手艺挣钱更多，结算文案标注技能加成", () => {
+    const intent = {
+      id: "w", summary: "上班干活", category: "work" as const, hours: 20,
+      risk: "low" as const, attr: "eq" as const, nsfw: false, energyCost: 20,
+    };
+    const { state } = newGameState(43);
+    state.world.year = state.character.birthYear + 30;
+    state.character.energy = 100;
+    const rookie = resolveAction(new Rng(5), state, intent, "success");
+    state.character.skills.push({ id: "s", name: "职场", category: "职业", level: 5, xp: 0 });
+    const veteran = resolveAction(new Rng(5), state, intent, "success");
+    expect(veteran.deltas.money).toBeGreaterThan(rookie.deltas.money);
+    expect(veteran.mechanical).toContain("技能「职场」Lv5");
+    expect(rookie.mechanical).not.toContain("做熟悉的事更稳");
+  });
+});
+
+describe("迁移定位：人搬到哪坐标就在哪", () => {
+  const mkMove = (summary: string, tier: "success" | "fail" = "success") => ({
+    intent: {
+      id: "m", summary, category: "work" as const, hours: 20,
+      risk: "low" as const, attr: "eq" as const, nsfw: false,
+    },
+    tier,
+    deltas: emptyDeltas(),
+    mechanical: "",
+  });
+
+  it("去外地工作成功后坐标更新，同回合入职落在新城市", async () => {
+    const { settleResidence, settleCareer } = await import("./lifecycle");
+    const { state } = newGameState(31);
+    state.world.year = state.character.birthYear + 22;
+    state.character.identity.residence = "中国·洛阳";
+    const actions = [mkMove("去深圳工作")];
+    const notes = settleResidence(state, actions);
+    expect(state.character.identity.residence).toBe("中国·深圳");
+    expect(notes[0]).toContain("深圳");
+    settleCareer(state, actions);
+    expect(state.character.identity.job?.employer.startsWith("深圳·")).toBe(true);
+  });
+
+  it("判定失败、非地名、未成年都不迁移", async () => {
+    const { settleResidence } = await import("./lifecycle");
+    const { state } = newGameState(32);
+    state.world.year = state.character.birthYear + 22;
+    const home = state.character.identity.residence;
+    settleResidence(state, [mkMove("去杭州工作", "fail")]);
+    expect(state.character.identity.residence).toBe(home);
+    settleResidence(state, [mkMove("去图书馆工作")]);
+    expect(state.character.identity.residence).toBe(home);
+    state.world.year = state.character.birthYear + 10;
+    settleResidence(state, [mkMove("搬到上海生活")]);
+    expect(state.character.identity.residence).toBe(home);
+  });
+
+  it("搬回老家回到出生城市，移居国外整体替换国家", async () => {
+    const { settleResidence } = await import("./lifecycle");
+    const { state } = newGameState(33);
+    state.world.year = state.character.birthYear + 30;
+    state.background.city = "洛阳";
+    state.character.identity.residence = "中国·北京";
+    settleResidence(state, [mkMove("搬回老家生活")]);
+    expect(state.character.identity.residence).toBe("中国·洛阳");
+    settleResidence(state, [mkMove("移居日本东京")]);
+    expect(state.character.identity.residence).toBe("日本·东京");
+  });
+});
+
+describe("情境卡与卡面个性化", () => {
+  it("欠债时出现补窟窿卡，引用真实欠款数字", async () => {
+    const { getDecisionBoard } = await import("./decisions");
+    const { state } = newGameState(40);
+    state.world.year = state.character.birthYear + 25;
+    state.character.money = -500;
+    const board = getDecisionBoard(state);
+    const debt = board.choices.find((c) => c.id === "context-ctx-debt");
+    expect(debt).toBeDefined();
+    expect(debt!.description).toContain("500");
+  });
+
+  it("技能磨砺卡引用最深的技能并积累该技能", async () => {
+    const { getDecisionBoard } = await import("./decisions");
+    const { state } = newGameState(41);
+    state.world.year = state.character.birthYear + 20;
+    state.character.skills.push({ id: "s", name: "吉他", category: "爱好", level: 4, xp: 10 });
+    const board = getDecisionBoard(state);
+    const hone = board.choices.find((c) => c.id === "context-ctx-hone-吉他");
+    expect(hone).toBeDefined();
+    expect(hone!.title).toContain("吉他");
+    expect(hone!.intent.skill).toBe("吉他");
+  });
+
+  it("模糊的「才艺」占位被替换为角色专属特长，同一角色稳定", async () => {
+    const { getDecisionBoard } = await import("./decisions");
+    const HOBBIES = ["绘画", "乐器", "棋艺", "舞蹈", "手工", "书法"];
+    const { state } = newGameState(50);
+    state.world.year = state.character.birthYear + 8; // 童年：极限投入卡原本挂「才艺」
+    state.granularity = "season";
+    const intense = getDecisionBoard(state).choices.find((c) => c.kind === "intense")!;
+    expect(HOBBIES).toContain(intense.intent.skill);
+    expect(getDecisionBoard(state).choices.find((c) => c.kind === "intense")!.intent.skill).toBe(intense.intent.skill);
+  });
+});
+
+describe("经济系统：钱和人脉都有花出去的窗口", () => {
+  it("生活方式与城市共同决定生活开销", async () => {
+    const { livingCost } = await import("./economy");
+    const { state } = newGameState(60);
+    state.world.year = state.character.birthYear + 25;
+    state.character.identity.residence = "中国·北京";
+    state.character.lifestyle = "frugal";
+    expect(livingCost(state, 13)).toBe(Math.round(120 * 13 * 0.5 * 1.6));
+    state.character.lifestyle = "lavish";
+    expect(livingCost(state, 13)).toBe(Math.round(120 * 13 * 4.5 * 1.6));
+    state.character.identity.residence = "中国·某县城";
+    expect(livingCost(state, 13)).toBe(Math.round(120 * 13 * 4.5 * 0.7));
+  });
+
+  it("存款撑不住时生活方式自动降档", () => {
+    const { state } = newGameState(60);
+    state.world.year = state.character.birthYear + 25;
+    state.granularity = "season";
+    state.character.lifestyle = "lavish";
+    state.character.money = 1000;
+    const notes = fastForward(state, 1);
+    expect(state.character.lifestyle).toBe("comfort");
+    expect(notes.some((n) => n.includes("生活方式降为"))).toBe(true);
+  });
+
+  it("讲究的日子恢复更快：精力自然恢复随档位提升", () => {
+    const mk = (lifestyle: "frugal" | "lavish") => {
+      const { state } = newGameState(64);
+      state.world.year = state.character.birthYear + 25;
+      state.granularity = "season";
+      state.character.lifestyle = lifestyle;
+      state.character.money = 10_000_000; // 避免自动降档干扰
+      state.character.energy = 40;
+      fastForward(state, 1);
+      return state.character.energy;
+    };
+    expect(mk("lavish")).toBeGreaterThan(mk("frugal"));
+  });
+
+  it("动用人脉护航：扣点数、降难度；点数不足时无效", () => {
+    const mkRisk = () => ({
+      id: "r", summary: "赌一把大的", category: "adventure" as const, hours: 20,
+      risk: "high" as const, attr: "luck" as const, nsfw: false,
+    });
+    const a = newGameState(61).state;
+    a.world.year = a.character.birthYear + 25;
+    a.character.connections = 0;
+    const base = beginTurn(a, "x", [mkRisk()]);
+
+    const b = newGameState(61).state;
+    b.world.year = b.character.birthYear + 25;
+    b.character.connections = 15;
+    const boosted = beginTurn(b, "x", [mkRisk()], undefined, { connections: true });
+    expect(boosted.checks[0].difficulty).toBe(base.checks[0].difficulty - 10);
+    expect(b.character.connections).toBe(0);
+    expect(boosted.connectionsSpent).toBe(15);
+
+    const c = newGameState(61).state;
+    c.world.year = c.character.birthYear + 25;
+    c.character.connections = 3; // 不足 5 点撑不起人情
+    const weak = beginTurn(c, "x", [mkRisk()], undefined, { connections: true });
+    expect(weak.checks[0].difficulty).toBe(base.checks[0].difficulty);
+    expect(c.character.connections).toBe(3);
+  });
+
+  it("报班：钱无论成败都花出去，技能经验 ×2.5", () => {
+    const { state } = newGameState(62);
+    state.world.year = state.character.birthYear + 20;
+    state.character.energy = 100;
+    const intent = {
+      id: "t", summary: "跟老师学吉他", category: "leisure" as const, hours: 20,
+      risk: "low" as const, attr: "mood" as const, nsfw: false, skill: "吉他", energyCost: 20,
+    };
+    const free = resolveAction(new Rng(3), state, intent, "success");
+    const paid = resolveAction(new Rng(3), state, { ...intent, moneyCost: 900 }, "success");
+    expect(paid.deltas.money).toBe(-900);
+    expect(paid.deltas.skillXp[0].xp).toBeGreaterThan(free.deltas.skillXp[0].xp * 2);
+    const failedPaid = resolveAction(new Rng(3), state, { ...intent, moneyCost: 900 }, "fail");
+    expect(failedPaid.deltas.money).toBe(-900); // 学费不退
+  });
+
+  it("就医：花钱买健康，恢复量翻倍", () => {
+    const { state } = newGameState(62);
+    state.world.year = state.character.birthYear + 45;
+    state.character.energy = 100;
+    state.character.attrs.health = 40;
+    state.character.attrBounds.health.ceiling = 100;
+    const intent = {
+      id: "h", summary: "认真做一次体检调理", category: "health" as const, hours: 20,
+      risk: "low" as const, attr: "health" as const, nsfw: false, energyCost: -12,
+    };
+    const free = resolveAction(new Rng(4), state, intent, "success");
+    const paid = resolveAction(new Rng(4), state, { ...intent, moneyCost: 600 }, "success");
+    expect(paid.deltas.money).toBe(-600);
+    expect(paid.deltas.attrs.health ?? 0).toBeGreaterThan(free.deltas.attrs.health ?? 0);
+  });
+
+  it("就医情境卡按处境出现，钱不够时提交被拦下", async () => {
+    const { getDecisionBoard, selectionError } = await import("./decisions");
+    const { state } = newGameState(63);
+    state.world.year = state.character.birthYear + 45;
+    state.character.money = 5000;
+    state.character.attrs.health = 45;
+    const board = getDecisionBoard(state);
+    const medical = board.choices.find((c) => c.id === "context-ctx-medical");
+    expect(medical).toBeDefined();
+    expect(medical!.moneyCost).toBeGreaterThan(0);
+    state.character.money = 0;
+    expect(selectionError(state, board, [medical!.id])).toContain("钱不够");
+  });
+
+  it("LLM 卡的 moneyCost 被裁剪到付得起的范围", async () => {
+    const { sanitizeLlmChoices } = await import("./decisions");
+    const { state } = newGameState(2);
+    state.character.money = 500;
+    const cards = sanitizeLlmChoices(state, [
+      { title: "给她买条项链", category: "romance", attr: "charm", moneyCost: 999999 },
+    ]);
+    expect(cards[0].moneyCost).toBe(500);
+    expect(cards[0].intent.moneyCost).toBe(500);
   });
 });
 
@@ -510,8 +864,8 @@ describe("人生阶段与粒度", () => {
 
   it("粒度随年龄细化", () => {
     expect(granularityOf(3)).toBe("year");
-    expect(granularityOf(8)).toBe("month");
-    expect(granularityOf(14)).toBe("week");
+    expect(granularityOf(8)).toBe("season");
+    expect(granularityOf(14)).toBe("season");
   });
 });
 

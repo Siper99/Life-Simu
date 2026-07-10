@@ -3,6 +3,7 @@
 import { GenderPref } from "../engine/genesis";
 import { getTalentRarity } from "../engine/talents";
 import { ATTR_LABELS, AttrKey } from "../engine/types";
+import { attributeScaleLabel } from "../engine/attributes";
 import { useStore } from "../store/gameStore";
 
 const GENDER_OPTIONS: { value: GenderPref; label: string }[] = [
@@ -42,9 +43,11 @@ export function Genesis() {
         <p className="genesis-summary">{state.log[0].text}</p>
         <div className="genesis-attrs">
           {(Object.keys(c.attrs) as AttrKey[]).map((k) => (
-            <div key={k} className="genesis-attr">
+            <div key={k} className="genesis-attr"
+              title={`${ATTR_LABELS[k]}当前 ${c.attrs[k]}：${attributeScaleLabel(k, c.attrs[k])}`}>
               <span>{ATTR_LABELS[k]}</span>
               <b>{c.attrs[k]}</b>
+              <small>基线 {c.attrBounds[k].floor} · 潜力 {c.attrBounds[k].ceiling}</small>
             </div>
           ))}
         </div>

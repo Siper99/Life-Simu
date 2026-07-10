@@ -181,15 +181,19 @@ button {
 .genesis-name { color: var(--accent); font-weight: 600; font-size: 16px; margin-bottom: 8px; }
 .genesis-summary { margin-bottom: 16px; }
 
-.genesis-attrs { display: flex; flex-wrap: wrap; gap: 10px 22px; }
+.genesis-attrs { display: grid; grid-template-columns: repeat(auto-fit, minmax(125px, 1fr)); gap: 10px 14px; }
 .genesis-attr {
-  display: flex;
-  gap: 8px;
+  display: grid;
+  grid-template-columns: 1fr auto;
   align-items: baseline;
+  padding: 7px 9px;
   color: var(--text-dim);
+  background: rgba(255, 255, 255, 0.025);
+  border-radius: 7px;
   font-size: 13px;
 }
 .genesis-attr b { color: var(--accent); font-size: 17px; }
+.genesis-attr small { grid-column: 1 / -1; margin-top: 2px; color: #697080; font-size: 9.5px; }
 
 .genesis-talents { display: flex; gap: 14px; flex-wrap: wrap; justify-content: center; }
 .talent-card {
@@ -259,9 +263,15 @@ button {
   background: var(--bg-input);
   border-radius: 4px;
   overflow: hidden;
+  position: relative;
 }
 .attr-fill { height: 100%; border-radius: 4px; transition: width 0.6s ease; }
-.attr-value { width: 26px; font-size: 12px; text-align: right; color: var(--text-dim); }
+.attr-bound { position: absolute; top: 0; bottom: 0; width: 1px; pointer-events: none; }
+.attr-floor { background: rgba(255, 255, 255, 0.42); }
+.attr-ceiling { width: 2px; background: #f1d27a; box-shadow: 0 0 4px rgba(241, 210, 122, 0.75); }
+.attr-value { width: 42px; font-size: 12px; text-align: right; color: var(--text-dim); }
+.attr-value small { font-size: 9px; color: #697080; }
+.attr-legend { margin: 6px 0 0 40px; font-size: 9px; line-height: 1.35; color: #697080; }
 
 .status-kv { display: flex; flex-direction: column; gap: 3px; font-size: 13px; color: var(--text-dim); }
 .status-kv b { color: var(--text); }
@@ -282,6 +292,14 @@ button {
 .npc-relation { color: var(--text-dim); font-size: 11px; }
 .affinity-pos { color: #6fbf8f; font-size: 12px; }
 .affinity-neg { color: var(--danger); font-size: 12px; }
+.career-progress { padding-left: 22px; font-size: 11px; color: var(--accent-dim); }
+.npc-row { align-items: flex-start; gap: 8px; padding: 3px 0; }
+.npc-main { display: flex; flex-direction: column; min-width: 0; }
+.npc-meta { color: var(--text-dim); font-size: 10px; line-height: 1.4; white-space: nowrap; }
+.npc-health-mid { color: #d6a85f; }
+.npc-health-low { color: var(--danger); }
+.npc-deceased { opacity: 0.55; }
+.npc-deceased .npc-meta { color: var(--text-dim); }
 
 .game-main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
 
@@ -703,11 +721,51 @@ button {
 .decision-card.kind-director { border-color: rgba(213, 105, 94, 0.48); }
 .decision-card.kind-recovery { border-color: rgba(92, 161, 137, 0.38); }
 .decision-card.kind-llm { border-color: rgba(232, 184, 75, 0.42); background: linear-gradient(120deg, rgba(148, 112, 28, 0.12), #222630 58%); }
+.decision-card.kind-context { border-color: rgba(84, 176, 122, 0.48); background: linear-gradient(120deg, rgba(38, 104, 66, 0.14), #222630 58%); }
+.decision-card.kind-intense { border-color: rgba(235, 126, 73, 0.65); background: linear-gradient(120deg, rgba(160, 67, 36, 0.2), #222630 60%); }
+.decision-card.energy-unaffordable:not(.selected) { opacity: 0.58; border-style: dashed; }
+.choice-intense { padding: 1px 7px; border-radius: 999px; font-size: 9.5px; font-weight: 700; color: #ffc09d; background: rgba(191, 76, 34, 0.24); }
+.choice-costs .energy-heavy { color: #f39a72; font-weight: 700; }
+.energy-intensity { padding: 0 5px; border-radius: 999px; background: rgba(255, 255, 255, 0.05); }
+.intensity-extreme { color: #f39a72; background: rgba(191, 76, 34, 0.16); }
+.intensity-high { color: #e0b96e; }
 .decision-card-top { display: flex; align-items: center; gap: 6px; min-height: 18px; margin-bottom: 4px; }
 .choice-category, .choice-expiry, .choice-director { padding: 1px 7px; border-radius: 999px; font-size: 9.5px; font-weight: 700; background: #303543; color: #b8becc; }
 .choice-expiry { color: #d8b5ef; background: rgba(126, 76, 161, 0.24); }
 .choice-director { color: #efaaa3; background: rgba(160, 63, 53, 0.18); }
 .choice-llm { padding: 1px 7px; border-radius: 999px; font-size: 9.5px; font-weight: 700; color: #ecd193; background: rgba(160, 124, 33, 0.22); }
+.choice-context { padding: 1px 7px; border-radius: 999px; font-size: 9.5px; font-weight: 700; color: #9fd8b4; background: rgba(46, 125, 82, 0.22); }
+.money-cost { color: #e8c86e; font-weight: 700; }
+
+/* 生活方式档位（左侧状态栏） */
+.lifestyle-row { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.lifestyle-label { font-size: 10.5px; color: #8f96a6; margin-right: 2px; }
+.lifestyle-btn { padding: 1px 8px; border-radius: 999px; border: 1px solid #3a3f4d; background: transparent; color: #9aa1b0; font-size: 10.5px; cursor: pointer; }
+.lifestyle-btn:hover { border-color: #5a6172; color: #cfd4de; }
+.lifestyle-btn.active { border-color: rgba(232, 184, 75, 0.6); background: rgba(148, 112, 28, 0.18); color: #ecd193; font-weight: 700; }
+
+/* 开发者面板 */
+.dev-active { color: #e8b84b; border-color: rgba(232, 184, 75, 0.55); }
+.dev-panel { position: fixed; top: 56px; right: 16px; width: 330px; max-height: calc(100vh - 84px); overflow-y: auto; background: #1c1f27; border: 1px solid rgba(232, 184, 75, 0.42); border-radius: 12px; padding: 12px 14px; z-index: 90; box-shadow: 0 14px 44px rgba(0, 0, 0, 0.55); }
+.dev-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; font-weight: 700; color: #ecd193; font-size: 13px; }
+.dev-head small { font-weight: 400; color: #8f96a6; margin-left: 6px; }
+.dev-section { border-top: 1px dashed #333846; margin-top: 8px; padding-top: 8px; }
+.dev-heading { font-size: 11px; color: #8f96a6; margin-bottom: 6px; }
+.dev-row { display: flex; align-items: center; gap: 6px; margin: 4px 0; font-size: 12px; }
+.dev-label { flex: none; width: 36px; color: #b8becc; }
+.dev-unit { color: #8f96a6; }
+.dev-row input[type="range"] { flex: 1; accent-color: #e8b84b; min-width: 0; }
+.dev-num { width: 60px; background: #252a35; border: 1px solid #3a3f4d; color: #e6e9f0; border-radius: 6px; padding: 2px 6px; font-size: 12px; }
+.dev-num-wide { width: 100px; }
+.dev-btn { padding: 3px 10px; border-radius: 999px; border: 1px solid #3a3f4d; background: transparent; color: #b8becc; font-size: 11.5px; cursor: pointer; }
+.dev-btn:hover:not(:disabled) { border-color: rgba(232, 184, 75, 0.55); color: #ecd193; }
+.dev-btn:disabled { opacity: 0.45; cursor: default; }
+.dev-revive { width: 100%; padding: 7px 0; color: #9fd8b4; border-color: rgba(84, 176, 122, 0.5); }
+
+/* 动用人脉护航开关（决策盘页脚） */
+.backing-toggle { display: flex; align-items: center; gap: 7px; padding: 6px 10px; border-radius: 8px; border: 1px dashed rgba(84, 176, 122, 0.45); color: #9fd8b4; font-size: 12px; cursor: pointer; user-select: none; }
+.backing-toggle.active { border-style: solid; background: rgba(38, 104, 66, 0.16); }
+.backing-toggle input { accent-color: #54b07a; }
 
 /* 时代大事件之年：世界横幅高亮 */
 .world-pulse-major { border-color: rgba(232, 184, 75, 0.55); background: linear-gradient(120deg, rgba(148, 112, 28, 0.16), transparent 60%); }
@@ -768,6 +826,7 @@ button {
 .energy-meter-head { display: flex; justify-content: space-between; color: var(--text-dim); font-size: 11px; margin-bottom: 4px; }
 .energy-meter-track { height: 6px; overflow: hidden; border-radius: 999px; background: var(--bg-input); }
 .energy-meter-fill { height: 100%; border-radius: inherit; background: linear-gradient(90deg, #4a8ea0, #67c6b1); transition: width 0.4s ease; }
+.energy-state { margin-top: 4px; min-height: 14px; font-size: 9px; line-height: 1.35; color: #697080; }
 
 @media (max-width: 1180px) {
   .status-panel { width: 238px; }

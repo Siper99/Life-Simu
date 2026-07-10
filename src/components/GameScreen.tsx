@@ -1,8 +1,10 @@
 // 游戏主界面：持续运转的世界、叙事记录与有限资源决策板。
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { formatDate } from "../engine/types";
+import { connectionsBoost } from "../engine/economy";
+import { energyIntensityLabel, formatDate } from "../engine/types";
 import { mergedBoard, useStore } from "../store/gameStore";
+import { DevPanel } from "./DevPanel";
 import { StatusPanel } from "./StatusPanel";
 import { SwingBar } from "./SwingBar";
 
@@ -13,7 +15,7 @@ const CATEGORY_NAMES = {
 
 export function GameScreen() {
   const { game, phase, currentCheckIndex, submitTurn, submitChoices, judgeSwing, confirmSwing,
-    doFastForward, setScreen, lastError, llmChoices } = useStore();
+    doFastForward, setScreen, lastError, llmChoices, backing, setBacking, devOpen, toggleDev } = useStore();
   const [input, setInput] = useState("");
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [customOpen, setCustomOpen] = useState(false);
@@ -43,18 +45,24 @@ export function GameScreen() {
   const busy = phase !== "idle";
   const currentCheck = phase === "swinging" && game.pending
     ? game.pending.checks[currentCheckIndex] : null;
-  const unitLabel = game.granularity === "week" ? "周" : game.granularity === "month" ? "月" : "年";
-  // 跳过时间的档位：随粒度换算，覆盖 1 单位到 1 年
+  const unitLabel = game.granularity === "season" ? "季" : game.granularity === "week" ? "周" : game.granularity === "month" ? "月" : "年";
+  // 默认成长节奏改为季度：一年只需四次关键选择，仍可继续快进。
   const skipOptions =
-    game.granularity === "week"
-      ? [{ turns: 1, label: "1周" }, { turns: 4, label: "1个月" }, { turns: 13, label: "3个月" }, { turns: 26, label: "半年" }, { turns: 52, label: "1年" }]
-      : game.granularity === "month"
-        ? [{ turns: 1, label: "1个月" }, { turns: 3, label: "3个月" }, { turns: 6, label: "半年" }, { turns: 9, label: "9个月" }, { turns: 12, label: "1年" }]
-        : [{ turns: 1, label: "1年" }, { turns: 2, label: "2年" }, { turns: 3, label: "3年" }];
+    game.granularity === "season"
+      ? [{ turns: 1, label: "1季" }, { turns: 2, label: "半年" }, { turns: 4, label: "1年" }, { turns: 8, label: "2年" }]
+      : game.granularity === "week"
+        ? [{ turns: 1, label: "1周" }, { turns: 4, label: "1个月" }, { turns: 13, label: "1季" }, { turns: 26, label: "半年" }, { turns: 52, label: "1年" }]
+        : game.granularity === "month"
+          ? [{ turns: 1, label: "1个月" }, { turns: 3, label: "1季" }, { turns: 6, label: "半年" }, { turns: 12, label: "1年" }]
+          : [{ turns: 1, label: "1年" }, { turns: 2, label: "2年" }, { turns: 3, label: "3年" }];
   const skipPick = skipOptions[Math.min(skipIdx, skipOptions.length - 1)];
   const selectedChoices = board?.choices.filter((choice) => selectedIds.includes(choice.id)) ?? [];
   const timeUsed = selectedChoices.reduce((sum, choice) => sum + choice.timeCost, 0);
   const energyUsed = selectedChoices.reduce((sum, choice) => sum + Math.max(0, choice.energyCost), 0);
+  const moneyUsed = selectedChoices.reduce((sum, choice) => sum + (choice.moneyCost ?? 0), 0);
+  // 人脉护航：选中的安排里有高危行动、且人脉攒够 5 点时才亮出开关
+  const boost = connectionsBoost(game);
+  const backingAvailable = Boolean(boost) && selectedChoices.some((choice) => choice.intent.risk === "high");
 
   const onSubmit = () => {
     const text = input.trim();
@@ -77,7 +85,7 @@ export function GameScreen() {
       return;
     }
     if (energyUsed + Math.max(0, choice.energyCost) > game.character.energy) {
-      setSelectionMessage("你的精力撑不住这些安排，先留时间休息吧。");
+      setSelectionMessage("当前精力不足。高强度行动必须先休整一季，或放弃另一项安排。");
       return;
     }
     setSelectedIds([...selectedIds, id]);
@@ -87,6 +95,7 @@ export function GameScreen() {
   return (
     <div className="game-screen">
       <StatusPanel game={game} />
+      {devOpen && <DevPanel game={game} />}
       <main className="game-main">
         <header className="game-header">
           <span className="game-date">{formatDate(game)}</span>
@@ -117,6 +126,7 @@ export function GameScreen() {
                 </button>
               </div>}
             </div>}
+            <button className={`btn-ghost${devOpen ? " dev-active" : ""}`} title="开发者模式" onClick={toggleDev}>🛠</button>
             <button className="btn-ghost" onClick={() => setScreen("settings")}>⚙ 设置</button>
             <button className="btn-ghost" onClick={() => setScreen("menu")}>☰ 菜单</button>
           </div>
@@ -159,21 +169,28 @@ export function GameScreen() {
         <div className="choice-list">
           {board.choices.map((choice) => {
             const selected = selectedIds.includes(choice.id);
+            const unaffordable = !selected && energyUsed + Math.max(0, choice.energyCost) > game.character.energy;
             return <button key={choice.id} type="button"
-              className={`decision-card kind-${choice.kind}${selected ? " selected" : ""}`}
+              className={`decision-card kind-${choice.kind}${selected ? " selected" : ""}${unaffordable ? " energy-unaffordable" : ""}`}
               disabled={busy} onClick={() => toggleChoice(choice.id)}>
               <div className="decision-card-top">
                 <span className="choice-category">{choice.categoryLabel}</span>
                 {choice.expiresIn && <span className="choice-expiry">仅剩 {choice.expiresIn} 回合</span>}
                 {choice.kind === "director" && <span className="choice-director">导演介入</span>}
+                {choice.kind === "context" && <span className="choice-context">🎯 此刻</span>}
                 {choice.kind === "llm" && <span className="choice-llm">✨ 灵感</span>}
+                {choice.kind === "intense" && <span className="choice-intense">🔥 极限投入</span>}
                 <span className="choice-selected">{selected ? "✓ 已安排" : "+ 安排"}</span>
               </div>
               <strong>{choice.title}</strong><p>{choice.description}</p>
               <div className="choice-costs"><span>时间 {choice.timeCost} 格</span>
-                <span className={choice.energyCost < 0 ? "energy-gain" : ""}>
+                <span className={choice.energyCost < 0 ? "energy-gain" : choice.energyCost >= 50 ? "energy-heavy" : ""}>
                   精力 {choice.energyCost > 0 ? `-${choice.energyCost}` : `+${Math.abs(choice.energyCost)}`}
                 </span>
+                <span className={`energy-intensity intensity-${choice.energyCost >= 50 ? "extreme" : choice.energyCost >= 35 ? "high" : "normal"}`}>
+                  {energyIntensityLabel(choice.energyCost)}
+                </span>
+                {choice.moneyCost ? <span className="money-cost">💰 -{choice.moneyCost.toLocaleString()}</span> : null}
                 {choice.intent.risk === "high" && <span className="risk-high">高风险</span>}
               </div>
               <div className="choice-consequences">
@@ -186,7 +203,14 @@ export function GameScreen() {
 
         <div className="decision-footer">
           <div className="decision-summary"><span>{selectedIds.length > 0 ? `已选 ${selectedIds.length} 项` : "还没有安排"}</span>
-            <span>时间 {timeUsed}/{board.timeBudget} · 精力 {energyUsed}/{game.character.energy}</span></div>
+            <span>时间 {timeUsed}/{board.timeBudget} · 精力 {energyUsed}/{game.character.energy}{moneyUsed > 0 ? ` · 花费 ${moneyUsed.toLocaleString()}` : ""}</span></div>
+          {backingAvailable && boost && (
+            <label className={`backing-toggle${backing ? " active" : ""}`}>
+              <input type="checkbox" checked={backing} disabled={busy}
+                onChange={(e) => setBacking(e.target.checked)} />
+              🤝 动用人脉护航：花 {boost.cost} 点人脉，本回合高危判定难度 -{boost.ease}
+            </label>
+          )}
           {(selectionMessage || lastError) && <p className="decision-error">{selectionMessage ?? lastError}</p>}
           <button className="btn-primary decision-confirm" disabled={busy || selectedIds.length === 0}
             onClick={() => void submitChoices(selectedIds)}>
@@ -197,7 +221,7 @@ export function GameScreen() {
           </button>
           {customOpen && <div className="custom-action">
             <textarea className="game-input" value={input} disabled={busy} rows={3}
-              placeholder="描述一件选项里没有的事。自由输入是补充入口，不受三格时间保护。"
+              placeholder="描述一件选项里没有的事。自由行动仍会消耗精力，强行透支会降低收益并伤害健康。"
               onChange={(event) => setInput(event.target.value)} />
             <button className="btn-ghost" disabled={busy || !input.trim()} onClick={onSubmit}>执行自定义行动</button>
           </div>}
