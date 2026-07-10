@@ -21,6 +21,7 @@ const DIR = { baseDir: BaseDirectory.AppData };
 export function migrateGame(state: GameState): GameState {
   state.character.energy ??= 75;
   state.character.lifestyle ??= "standard";
+  state.scene ??= null;
   state.decisionHistory ??= [];
   state.hooks ??= [];
   state.character.attrBounds ??= migratedAttributeBounds(state.character, state.id);

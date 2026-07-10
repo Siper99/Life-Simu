@@ -744,10 +744,21 @@ button {
 .lifestyle-btn:hover { border-color: #5a6172; color: #cfd4de; }
 .lifestyle-btn.active { border-color: rgba(232, 184, 75, 0.6); background: rgba(148, 112, 28, 0.18); color: #ecd193; font-weight: 700; }
 
+/* 场景模式：镜头拉近的连续对手戏 */
+.scene-panel { border-color: rgba(126, 76, 161, 0.5); }
+.scene-hint { font-size: 12px; color: #9aa1b0; line-height: 1.6; margin: 4px 0 10px; }
+.scene-beat-btn { width: 100%; margin-bottom: 8px; }
+.scene-exit-btn { width: 100%; }
+.scene-config { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; padding: 10px; border: 1px dashed rgba(126, 76, 161, 0.45); border-radius: 10px; }
+.scene-config-row { display: flex; gap: 8px; }
+.scene-config-row select { flex: 1; min-width: 0; }
+.scene-nsfw-check { font-size: 12px; color: #d8b5ef; }
+.scene-config-hint { font-size: 11px; color: #7a8090; line-height: 1.5; margin: 0; }
+
 /* 开发者面板 */
 .dev-active { color: #e8b84b; border-color: rgba(232, 184, 75, 0.55); }
 .dev-panel { position: fixed; top: 56px; right: 16px; width: 330px; max-height: calc(100vh - 84px); overflow-y: auto; background: #1c1f27; border: 1px solid rgba(232, 184, 75, 0.42); border-radius: 12px; padding: 12px 14px; z-index: 90; box-shadow: 0 14px 44px rgba(0, 0, 0, 0.55); }
-.dev-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; font-weight: 700; color: #ecd193; font-size: 13px; }
+.dev-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; font-weight: 700; color: #ecd193; font-size: 13px; cursor: move; user-select: none; touch-action: none; }
 .dev-head small { font-weight: 400; color: #8f96a6; margin-left: 6px; }
 .dev-section { border-top: 1px dashed #333846; margin-top: 8px; padding-top: 8px; }
 .dev-heading { font-size: 11px; color: #8f96a6; margin-bottom: 6px; }

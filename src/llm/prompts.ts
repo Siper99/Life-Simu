@@ -4,7 +4,7 @@ import { statusCard, historyContext } from "../engine/memory";
 import { describeDeltas } from "../engine/resolver";
 import { DecisionBoard } from "../engine/decisions";
 import { TurnOutcome } from "../engine/turn";
-import { GameState, TIER_LABELS, formatDate } from "../engine/types";
+import { GameState, SceneState, TIER_LABELS, formatDate } from "../engine/types";
 import { ContentRating } from "./types";
 
 export const INTENT_SYSTEM = `你是人生模拟游戏的意图解析器。玩家会用自由中文描述本周想做的事，你把它拆解为结构化行动列表。
@@ -142,6 +142,65 @@ export function choiceUserPrompt(state: GameState, board: DecisionBoard): string
   }
   lines.push(`【已有选项（不要重复）】${board.choices.map((c) => c.title).join("、")}`);
   return lines.join("\n");
+}
+
+// ---------- 场景模式：镜头拉近的连续对手戏 ----------
+
+export function sceneSystem(
+  rating: ContentRating,
+  onNsfwBackend: boolean,
+  style: string,
+  nsfwScene: boolean,
+): string {
+  const directive = nsfwScene && onNsfwBackend
+    ? "本场景为成人向：涉及亲密时可以直接、细致地描写，节奏可以慢下来。硬性边界（不可违反）：所有角色均为成年人、情节双方自愿。"
+    : ratingDirective(rating, onNsfwBackend);
+  return `你是人生模拟游戏的场景引擎。玩家把镜头拉近到一个连续的当下，正在和你逐拍推进一场对手戏：玩家给一拍行动或台词，你接一拍场景。
+
+要求：
+- 紧接上一拍的结尾继续：同一时间、同一地点、同一情绪。不跳时间、不概括、不回顾。
+- 每拍 80~220 字，第二人称「你」，以对话、动作、神态这些近景细节为主。风格：${style}。
+- 对手是活人：有自己的心思、情绪和底线，会回应也会拒绝，不迎合、不复读玩家的话。
+- 结尾停在玩家可以接话的瞬间；绝不替玩家说话、行动或做决定。
+- ${directive}
+只输出这一拍的正文，不要任何元信息。`;
+}
+
+export function sceneUserPrompt(state: GameState, scene: SceneState, playerText: string): string {
+  const lines: string[] = [];
+  lines.push(
+    `【场景】镜头拉近的连续场景${scene.target ? `，对手：${scene.target}` : ""}——现在推进第 ${scene.beats.length + 1} 拍`,
+  );
+  lines.push(`【角色状态】\n${statusCard(state)}`);
+  const npc = scene.target
+    ? state.character.npcs.find((n) => n.name === scene.target)
+    : null;
+  if (npc) {
+    lines.push(
+      `【对手详情】${npc.name}（${npc.relation}，${state.world.year - npc.birthYear}岁，${npc.occupation ?? "无职业"}，好感${npc.affinity}` +
+        `${npc.personality.length > 0 ? `，性格：${npc.personality.join("、")}` : ""}）` +
+        `${npc.memories.length > 0 ? `\n共同记忆：${npc.memories.slice(-4).join("；")}` : ""}`,
+    );
+  }
+  if (scene.beats.length > 0) {
+    lines.push(
+      "【这场戏到目前为止】\n" +
+        scene.beats.slice(-8).map((b) => `你：${b.player}\n场景：${b.narrative}`).join("\n"),
+    );
+  }
+  lines.push(`【你的这一拍】${playerText}`);
+  return lines.join("\n");
+}
+
+/** 无 LLM 时的场景兜底：不出戏但明确提示配置后端才有完整演出 */
+export function fallbackSceneBeat(scene: SceneState, playerText: string): string {
+  const who = scene.target ?? "对方";
+  const pool = [
+    `你${playerText.length > 12 ? "说完这些" : "这样做了"}，${who}沉默了一瞬，眼神里有什么东西动了动。`,
+    `${who}没有立刻回应，但也没有走开——这段相处还在继续。`,
+    `空气安静下来，${who}看着你，像在等你的下一句话。`,
+  ];
+  return pool[scene.beats.length % pool.length] + "（离线模式：配置 LLM 后端可获得完整的场景演出）";
 }
 
 export const SUMMARY_SYSTEM = `你是记忆压缩器。把给出的人生片段浓缩成一段 60 字以内的第二人称摘要，只保留对后续人生有影响的事实（关系变化、重大得失、身份变动）。只输出摘要正文。`;

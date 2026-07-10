@@ -852,6 +852,49 @@ describe("经济系统：钱和人脉都有花出去的窗口", () => {
   });
 });
 
+describe("场景模式：时间冻结的连续对手戏", () => {
+  it("进入条件与拍数/精力预算", async () => {
+    const { canEnterScene, beginScene, sceneBeatError, applySceneBeatCost, SCENE_MAX_BEATS, SCENE_BEAT_ENERGY } = await import("./scene");
+    const { state } = newGameState(70);
+    state.character.energy = 50;
+    expect(canEnterScene(state)).toBeNull();
+    beginScene(state, null, false);
+    expect(canEnterScene(state)).toContain("已有场景");
+    expect(sceneBeatError(state)).toBeNull();
+    applySceneBeatCost(state);
+    expect(state.character.energy).toBe(50 - SCENE_BEAT_ENERGY);
+    for (let i = 0; i < SCENE_MAX_BEATS; i++) state.scene!.beats.push({ player: "x", narrative: "y" });
+    expect(sceneBeatError(state)).toContain("最多");
+    state.scene!.beats.length = 0;
+    state.character.energy = SCENE_BEAT_ENERGY - 1;
+    expect(sceneBeatError(state)).toContain("精力");
+  });
+
+  it("收场结算：好感、心境与共同记忆落地，场景清空", async () => {
+    const { beginScene, settleScene } = await import("./scene");
+    const { state } = newGameState(71);
+    const npc = state.character.npcs[0];
+    const affinityBefore = npc.affinity;
+    const moodBefore = state.character.attrs.mood;
+    beginScene(state, npc.name, false);
+    for (let i = 0; i < 6; i++) state.scene!.beats.push({ player: "聊聊", narrative: "回应" });
+    const notes = settleScene(state);
+    expect(state.scene).toBeNull();
+    expect(npc.affinity).toBeGreaterThan(affinityBefore);
+    expect(state.character.attrs.mood).toBeGreaterThan(moodBefore);
+    expect(npc.memories.some((m) => m.includes("专注的相处"))).toBe(true);
+    expect(notes[0]).toContain(npc.name);
+  });
+
+  it("零拍收场不产生任何结算", async () => {
+    const { beginScene, settleScene } = await import("./scene");
+    const { state } = newGameState(72);
+    beginScene(state, null, false);
+    expect(settleScene(state)).toEqual([]);
+    expect(state.scene).toBeNull();
+  });
+});
+
 describe("人生阶段与粒度", () => {
   it("阶段划分正确", () => {
     expect(lifeStageOf(2)).toBe("婴儿");

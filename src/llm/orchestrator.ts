@@ -3,7 +3,7 @@
 import { DecisionBoard, DecisionChoice, sanitizeLlmChoices } from "../engine/decisions";
 import { fallbackParseIntents } from "../engine/resolver";
 import { TurnOutcome } from "../engine/turn";
-import { ActionIntent, GameState } from "../engine/types";
+import { ActionIntent, GameState, SceneState } from "../engine/types";
 import { chat, extractJson } from "./client";
 import {
   CHOICE_SYSTEM,
@@ -13,9 +13,12 @@ import {
   SKIP_SYSTEM,
   epitaphPrompt,
   fallbackNarrative,
+  fallbackSceneBeat,
   intentUserPrompt,
   narrativeSystem,
   narrativeUserPrompt,
+  sceneSystem,
+  sceneUserPrompt,
   skipUserPrompt,
   splitNarrativeHooks,
   trimToSentenceEnd,
@@ -164,6 +167,37 @@ export async function narrateSkip(
   } catch (e) {
     console.warn("岁月摘要走兜底：", e);
     return { text: fallback, usedLlm: false };
+  }
+}
+
+/**
+ * 场景模式的一拍：NSFW 场景全程路由到 nsfw 后端（带完整场景记录，保证连续性），
+ * 普通场景走主叙事后端；未配置时用模板兜底，游戏离线仍可完整收场结算。
+ */
+export async function narrateSceneBeat(
+  settings: AppSettings,
+  state: GameState,
+  scene: SceneState,
+  playerText: string,
+): Promise<{ text: string; usedLlm: boolean }> {
+  const nsfwProfile = profileForRole(settings, "nsfw");
+  const onNsfwBackend =
+    scene.nsfw && settings.contentRating === "explicit" && Boolean(nsfwProfile);
+  const profile = onNsfwBackend ? nsfwProfile : profileForRole(settings, "narrative");
+  if (!profile) return { text: fallbackSceneBeat(scene, playerText), usedLlm: false };
+  try {
+    const raw = await chat(
+      profile,
+      [
+        { role: "system", content: sceneSystem(settings.contentRating, onNsfwBackend, settings.narrativeStyle, scene.nsfw) },
+        { role: "user", content: sceneUserPrompt(state, scene, playerText) },
+      ],
+      { temperature: 0.95, maxTokens: 900, purpose: onNsfwBackend ? "场景·NSFW" : "场景" },
+    );
+    return { text: trimToSentenceEnd(raw.trim()), usedLlm: true };
+  } catch (e) {
+    console.warn("场景演出走兜底：", e);
+    return { text: fallbackSceneBeat(scene, playerText), usedLlm: false };
   }
 }
 

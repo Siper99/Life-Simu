@@ -252,6 +252,7 @@ export function newGameState(
     decisionHistory: [],
     hooks: [],
     pending: null,
+    scene: null,
     ended: false,
   };
   state.rngState = rng.getState();

@@ -13,7 +13,30 @@ export function DevPanel({ game }: { game: GameState }) {
   const age = ageOf(game);
   const [targetAge, setTargetAge] = useState(Math.min(age + 5, 100));
   const [logTick, setLogTick] = useState(0);
+  const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
   const calls = [...llmCallLog()].reverse().slice(0, 12);
+
+  // 抓住标题栏拖动面板；点到按钮时不启动拖拽
+  const startDrag = (e: React.PointerEvent<HTMLDivElement>) => {
+    if ((e.target as HTMLElement).closest("button")) return;
+    const panel = e.currentTarget.parentElement;
+    if (!panel) return;
+    const rect = panel.getBoundingClientRect();
+    const dx = e.clientX - rect.left;
+    const dy = e.clientY - rect.top;
+    const move = (ev: PointerEvent) => {
+      setPos({
+        x: Math.min(Math.max(8, ev.clientX - dx), window.innerWidth - 120),
+        y: Math.min(Math.max(8, ev.clientY - dy), window.innerHeight - 60),
+      });
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  };
 
   const setAttr = (k: AttrKey, raw: number) => devMutate((g) => {
     const v = Math.max(0, Math.min(100, Math.round(raw) || 0));
@@ -23,9 +46,9 @@ export function DevPanel({ game }: { game: GameState }) {
   });
 
   return (
-    <div className="dev-panel">
-      <div className="dev-head">
-        <span>🛠 开发者模式 <small>直接改写引擎真值 · 关闭面板时存档</small></span>
+    <div className="dev-panel" style={pos ? { left: pos.x, top: pos.y, right: "auto" } : undefined}>
+      <div className="dev-head" onPointerDown={startDrag} title="按住拖动">
+        <span>🛠 开发者模式 <small>直接改写引擎真值 · 可拖动</small></span>
         <button className="btn-ghost" onClick={toggleDev}>✕</button>
       </div>
 

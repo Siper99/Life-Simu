@@ -2,7 +2,9 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { connectionsBoost } from "../engine/economy";
+import { SCENE_BEAT_ENERGY, SCENE_MAX_BEATS } from "../engine/scene";
 import { energyIntensityLabel, formatDate } from "../engine/types";
+import { profileForRole } from "../llm/types";
 import { mergedBoard, useStore } from "../store/gameStore";
 import { DevPanel } from "./DevPanel";
 import { StatusPanel } from "./StatusPanel";
@@ -15,10 +17,14 @@ const CATEGORY_NAMES = {
 
 export function GameScreen() {
   const { game, phase, currentCheckIndex, submitTurn, submitChoices, judgeSwing, confirmSwing,
-    doFastForward, setScreen, lastError, llmChoices, backing, setBacking, devOpen, toggleDev } = useStore();
+    doFastForward, setScreen, lastError, llmChoices, backing, setBacking, devOpen, toggleDev,
+    enterScene, sceneBeat, exitScene, settings } = useStore();
   const [input, setInput] = useState("");
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [customOpen, setCustomOpen] = useState(false);
+  const [sceneOpen, setSceneOpen] = useState(false);
+  const [sceneTarget, setSceneTarget] = useState("");
+  const [sceneNsfw, setSceneNsfw] = useState(false);
   const [selectionMessage, setSelectionMessage] = useState<string | null>(null);
   const [skipOpen, setSkipOpen] = useState(false);
   const [skipIdx, setSkipIdx] = useState(0);
@@ -63,6 +69,9 @@ export function GameScreen() {
   // 人脉护航：选中的安排里有高危行动、且人脉攒够 5 点时才亮出开关
   const boost = connectionsBoost(game);
   const backingAvailable = Boolean(boost) && selectedChoices.some((choice) => choice.intent.risk === "high");
+  // 成人场景开关：露骨分级 + 配置了 nsfw 后端才出现
+  const nsfwSceneAvailable = settings.contentRating === "explicit" && Boolean(profileForRole(settings, "nsfw"));
+  const sceneNpcs = game.character.npcs.filter((n) => n.alive && n.birthYear <= game.world.year);
 
   const onSubmit = () => {
     const text = input.trim();
@@ -153,7 +162,31 @@ export function GameScreen() {
         </div>}
       </main>
 
-      {!game.ended && board && <aside className="decision-panel">
+      {!game.ended && game.scene && <aside className="decision-panel scene-panel">
+        <div className="decision-head">
+          <div>
+            <span className="decision-kicker">SCENE MODE{game.scene.nsfw ? " · 🔞" : ""}</span>
+            <h2>🎬 {game.scene.target ? `与${game.scene.target}的场景` : "拉近的镜头"}</h2>
+          </div>
+        </div>
+        <p className="scene-hint">
+          时间已冻结，剧情逐拍显示在左侧记录里。第 {Math.min(game.scene.beats.length + 1, SCENE_MAX_BEATS)}/{SCENE_MAX_BEATS} 拍 ·
+          每拍 -{SCENE_BEAT_ENERGY} 精力（当前 {game.character.energy}）· 收场时结算好感与心境。
+        </p>
+        <textarea className="game-input" rows={4} value={input} disabled={busy}
+          placeholder={`对${game.scene.target ?? "此刻"}说点什么，或描述你的动作……一拍换一拍。`}
+          onChange={(event) => setInput(event.target.value)} />
+        <button className="btn-primary scene-beat-btn" disabled={busy || !input.trim()}
+          onClick={() => { const t = input.trim(); setInput(""); void sceneBeat(t); }}>
+          {busy ? "场景推进中…" : "▶ 推进这一拍"}
+        </button>
+        <button className="btn-ghost scene-exit-btn" disabled={busy} onClick={() => void exitScene()}>
+          🎬 收场，回到人生节奏
+        </button>
+        {lastError && <p className="decision-error">{lastError}</p>}
+      </aside>}
+
+      {!game.ended && !game.scene && board && <aside className="decision-panel">
         <div className="decision-head">
           <div><span className="decision-kicker">DECISION BOARD</span><h2>{board.headline}</h2></div>
           <div className="time-budget" aria-label={`${board.timeLabel}已使用 ${timeUsed} 格，共 ${board.timeBudget} 格`}>
@@ -224,6 +257,32 @@ export function GameScreen() {
               placeholder="描述一件选项里没有的事。自由行动仍会消耗精力，强行透支会降低收益并伤害健康。"
               onChange={(event) => setInput(event.target.value)} />
             <button className="btn-ghost" disabled={busy || !input.trim()} onClick={onSubmit}>执行自定义行动</button>
+          </div>}
+          <button className="custom-toggle" type="button" onClick={() => setSceneOpen(!sceneOpen)}>
+            {sceneOpen ? "收起场景模式" : "🎬 场景模式：把镜头拉近，连续深入一段剧情"}
+          </button>
+          {sceneOpen && <div className="scene-config">
+            <div className="scene-config-row">
+              <select className="input" value={sceneTarget} onChange={(e) => setSceneTarget(e.target.value)}>
+                <option value="">无特定对象</option>
+                {sceneNpcs.map((n) => (
+                  <option key={n.id} value={n.name}>{n.name}（{n.relation}）</option>
+                ))}
+              </select>
+              <button className="btn-ghost" disabled={busy}
+                onClick={() => { setSceneOpen(false); enterScene(sceneTarget || null, sceneNsfw); }}>
+                开始场景
+              </button>
+            </div>
+            {nsfwSceneAvailable && (
+              <label className="role-check scene-nsfw-check">
+                <input type="checkbox" checked={sceneNsfw} onChange={(e) => setSceneNsfw(e.target.checked)} />
+                🔞 成人场景：全程走 NSFW 后端，记忆只留含蓄替身
+              </label>
+            )}
+            <p className="scene-config-hint">
+              时间不会流逝：一拍你的台词/动作，一拍剧情回应，上下文逐拍连贯。每拍 {SCENE_BEAT_ENERGY} 精力，最多 {SCENE_MAX_BEATS} 拍。
+            </p>
           </div>}
         </div>
       </aside>}

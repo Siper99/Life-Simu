@@ -18,8 +18,10 @@ import {
   TIER_LABELS,
   formatDate,
 } from "../engine/types";
-import { narrateSkip, narrateTurn, parseIntents, proposeChoices, writeEpitaph } from "../llm/orchestrator";
+import { narrateSceneBeat, narrateSkip, narrateTurn, parseIntents, proposeChoices, writeEpitaph } from "../llm/orchestrator";
 import { NSFW_MEMORY_PLACEHOLDER } from "../llm/prompts";
+import { profileForRole as profileForRoleFn } from "../llm/types";
+import { SCENE_BEAT_ENERGY, applySceneBeatCost, beginScene, canEnterScene, sceneBeatError, settleScene } from "../engine/scene";
 import { AppSettings, DEFAULT_SETTINGS, profileForRole } from "../llm/types";
 import * as persist from "./persist";
 
@@ -97,6 +99,9 @@ interface Store {
   devSkipToYear: (year: number) => Promise<void>; // 瞬时快进到指定年份
   submitTurn: (text: string) => Promise<void>;
   submitChoices: (choiceIds: string[]) => Promise<void>;
+  enterScene: (target: string | null, nsfw: boolean) => void; // 镜头拉近：时间冻结的连续场景
+  sceneBeat: (text: string) => Promise<void>; // 推进一拍（扣精力，生成场景演出）
+  exitScene: () => Promise<void>; // 收场：引擎结算好感/心境，记忆按 NSFW 规则落盘
   judgeSwing: (offset: number) => SwingVerdict | null; // 停针瞬间：判定+豁免掷点，返回最终结论供演出
   confirmSwing: () => Promise<void>; // 演出结束：推进到下一针或结算回合
   doFastForward: (turns: number, spanLabel?: string) => Promise<void>;
@@ -320,6 +325,75 @@ export const useStore = create<Store>((set, get) => ({
       set({ phase: "idle", lastError: `回合处理失败：${e}` });
     }
   },
+  enterScene: (target, nsfw) => {
+    const { game, phase, settings } = get();
+    if (!game || phase !== "idle") return;
+    const err = canEnterScene(game);
+    if (err) {
+      set({ lastError: err });
+      return;
+    }
+    // 只有露骨分级 + 配置了 nsfw 后端时，成人场景标记才生效（红线：不发官方 API）
+    const safeNsfw = nsfw && settings.contentRating === "explicit" && Boolean(profileForRoleFn(settings, "nsfw"));
+    beginScene(game, target, safeNsfw);
+    game.log.push({
+      turn: game.turn,
+      date: formatDate(game),
+      kind: "system",
+      text: `【场景】镜头拉近${target ? `——${target}` : ""}。时间已冻结，每拍消耗 ${SCENE_BEAT_ENERGY} 精力，随时可以收场。`,
+    });
+    set({ game: touch(game), lastError: null });
+    void persist.saveGame(game);
+  },
+
+  sceneBeat: async (text) => {
+    const { game, settings, phase } = get();
+    if (!game?.scene || phase !== "idle") return;
+    const err = sceneBeatError(game);
+    if (err) {
+      set({ lastError: err });
+      return;
+    }
+    set({ phase: "narrating", lastError: null });
+    applySceneBeatCost(game);
+    const nsfwFlag = game.scene.nsfw || undefined;
+    game.log.push({ turn: game.turn, date: formatDate(game), kind: "player", text, nsfw: nsfwFlag });
+    set({ game: touch(game) });
+    try {
+      const { text: beat } = await narrateSceneBeat(settings, game, game.scene, text);
+      game.scene.beats.push({ player: text, narrative: beat });
+      game.log.push({ turn: game.turn, date: formatDate(game), kind: "narrative", text: beat, nsfw: nsfwFlag });
+    } finally {
+      set({ game: touch(game), phase: "idle" });
+      await persist.saveGame(game);
+    }
+  },
+
+  exitScene: async () => {
+    const { game, phase } = get();
+    if (!game?.scene || phase !== "idle") return;
+    const scene = game.scene;
+    const beats = scene.beats.length;
+    const notes = settleScene(game);
+    if (beats > 0) {
+      // NSFW 场景的原文只留在日志展示；进入长期记忆的永远是替身文案
+      appendWeeklyNote(
+        game,
+        scene.nsfw
+          ? NSFW_MEMORY_PLACEHOLDER
+          : `${scene.target ? `与${scene.target}` : ""}有过一段专注的相处：${scene.beats[beats - 1].narrative.slice(0, 60)}`,
+      );
+    }
+    game.log.push({
+      turn: game.turn,
+      date: formatDate(game),
+      kind: "system",
+      text: notes.length > 0 ? `【场景收场】${notes.join("；")}` : "【场景收场】镜头拉远，回到人生的节奏。",
+    });
+    set({ game: touch(game) });
+    await persist.saveGame(game);
+  },
+
   judgeSwing: (offset) => {
     const { game, currentCheckIndex } = get();
     const pending = game?.pending;

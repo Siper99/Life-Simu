@@ -256,6 +256,20 @@ export interface DecisionHistoryEntry {
   categories: ActionCategory[];
 }
 
+// ---------- 场景模式：镜头拉近后的连续对手戏（见 engine/scene.ts） ----------
+
+export interface SceneBeat {
+  player: string; // 玩家这一拍的台词/动作
+  narrative: string; // 场景引擎接的一拍
+}
+
+export interface SceneState {
+  target: string | null; // 对手 NPC 姓名；null = 无特定对象
+  nsfw: boolean; // 整场标记：每一拍都路由到 nsfw 后端，收场时记忆只留替身文案
+  beats: SceneBeat[];
+  startedTurn: number;
+}
+
 
 export interface GameState {
   id: string;
@@ -273,6 +287,7 @@ export interface GameState {
   monthlySummaries: MemoryNote[]; // 月度摘要（最多 24 条）
   chronicle: string[]; // 人生编年史（每年一段）
   pending: PendingTurn | null;
+  scene: SceneState | null; // 进行中的场景（时间冻结，不影响回合推进）
   decisionHistory: DecisionHistoryEntry[]; // 导演系统只读取最近的结构化选择
   hooks: LifeHook[]; // 叙事线头（最多 6 条，回响卡与伏笔回收用）
   ended: boolean;
