@@ -16,6 +16,42 @@ export class LlmError extends Error {
   }
 }
 
+/** 各家官方端点域名：命中即视为可信，不再向用户二次确认 */
+export const OFFICIAL_HOSTS = new Set([
+  "api.deepseek.com",
+  "api.x.ai",
+  "api.openai.com",
+  "api.anthropic.com",
+]);
+
+export interface BackendUrlCheck {
+  ok: boolean;
+  host: string;
+  isLocal: boolean;
+  isOfficial: boolean;
+  reason?: string;
+}
+
+/**
+ * 校验后端地址：API Key 会随请求发往这个地址，所以发送前必须确认协议安全。
+ * 明文 HTTP 只放行本机回环地址（localhost/127.0.0.1/::1），其余一律要求 HTTPS，
+ * 防止被篡改的配置/误抄的地址把密钥明文发到远端或发错域名。
+ */
+export function checkBackendUrl(raw: string): BackendUrlCheck {
+  let u: URL;
+  try {
+    u = new URL(raw);
+  } catch {
+    return { ok: false, host: "", isLocal: false, isOfficial: false, reason: "后端地址格式无效" };
+  }
+  const host = u.hostname.replace(/^\[|\]$/g, "");
+  const isLocal = host === "localhost" || host === "127.0.0.1" || host === "::1";
+  if (u.protocol !== "https:" && !(u.protocol === "http:" && isLocal)) {
+    return { ok: false, host, isLocal, isOfficial: false, reason: "只允许 HTTPS（仅本机地址可用 HTTP）——密钥不能明文发往远端" };
+  }
+  return { ok: true, host, isLocal, isOfficial: OFFICIAL_HOSTS.has(host) };
+}
+
 // ---------- 路由审计：每次 LLM 请求记一条，开发者面板与控制台共用 ----------
 
 export interface LlmCallRecord {
@@ -60,6 +96,12 @@ async function requestOnce(
   temperature: number,
   maxTokens: number,
 ): Promise<ChatOnce> {
+  // 发送前最后一道闸：拦住把密钥明文发往远端或发错协议的请求
+  const urlCheck = checkBackendUrl(profile.baseURL);
+  if (!urlCheck.ok) {
+    throw new LlmError(`后端地址不安全：${urlCheck.reason}`);
+  }
+
   if (profile.kind === "anthropic") {
     const system = messages.filter((m) => m.role === "system").map((m) => m.content).join("\n\n");
     const rest = messages.filter((m) => m.role !== "system");

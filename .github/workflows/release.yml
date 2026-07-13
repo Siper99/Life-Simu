@@ -1,8 +1,17 @@
-# 发布流水线：推送 v* 标签时自动构建 Windows 安装包并发布到 GitHub Release，
+# 发布流水线：推送 v* 标签时构建 Windows 安装包并发布到 GitHub Release，
 # 同时生成 updater 所需的 .sig 签名与 latest.json（旧版应用据此自动发现新版）。
 #
-# 需要在仓库 Settings → Secrets and variables → Actions 里配置：
-#   TAURI_SIGNING_PRIVATE_KEY = 本机 ~/.tauri/life-sim.key 的完整内容（私钥，千万别丢）
+# 【签名私钥的审批隔离——必须在 GitHub 网页端一次性配置，否则本文件的 environment 形同虚设】
+# 更新签名私钥能让任意版本通过应用内自动更新的签名校验，一旦泄露=可推送恶意更新，
+# 因此私钥只放在受保护的 Environment 里、发布前需人工审批：
+#   1. Settings → Environments → 新建 `release`：
+#        - Required reviewers 勾选自己（发布前需手动点批准，job 在批准前读不到 secret）；
+#        - Deployment branches and tags 限制为 tag `v*`（只有版本标签能进入该环境）。
+#   2. 把 TAURI_SIGNING_PRIVATE_KEY 从仓库级 Secrets 移到该 Environment 的 Secrets
+#        （= ~/.tauri/life-sim.key 的完整内容，私钥，千万别丢）。
+#   3. Settings → Rules → 新建 ruleset 保护 `v*` 标签：禁止非授权者创建/移动标签。
+#   4. （可选）Settings → General 启用 Immutable releases，防止已发布资产被替换。
+# 所有第三方 Action 均固定到完整 commit SHA（防 tag 被移动到恶意提交）；升级时手动换 SHA。
 
 name: Release
 
@@ -17,23 +26,27 @@ permissions:
 jobs:
   build:
     runs-on: windows-latest
+    # 受保护环境：job 在人工批准前不会被调度，也读不到下面的签名 secret
+    environment: release
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
           cache: npm
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # stable 分支（该仓库不打 tag），pin 到具体提交
+        with:
+          toolchain: stable
 
-      - uses: swatinem/rust-cache@v2
+      - uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           workspaces: src-tauri
 
       - run: npm ci
 
-      - uses: tauri-apps/tauri-action@v0
+      - uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}

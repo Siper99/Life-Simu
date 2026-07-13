@@ -7,7 +7,7 @@ import type { LlmProfile } from "./types";
 vi.mock("@tauri-apps/plugin-http", () => ({ fetch: vi.fn() }));
 const fetchMock = vi.fn();
 vi.stubGlobal("fetch", fetchMock);
-const { chat, llmCallLog, clearLlmCallLog } = await import("./client");
+const { chat, llmCallLog, clearLlmCallLog, checkBackendUrl } = await import("./client");
 
 const profile: LlmProfile = {
   id: "t", name: "测试", kind: "openai", baseURL: "http://localhost/v1",
@@ -59,6 +59,39 @@ describe("chat 自动续写", () => {
     ]);
     expect(await chat(profile, [{ role: "user", content: "x" }])).toBe("一二三");
     expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+});
+
+describe("后端地址安全校验（密钥发送目标）", () => {
+  it("官方 HTTPS 域名放行且标记为可信", () => {
+    const c = checkBackendUrl("https://api.deepseek.com/v1");
+    expect(c.ok).toBe(true);
+    expect(c.isOfficial).toBe(true);
+    expect(c.host).toBe("api.deepseek.com");
+  });
+
+  it("自定义 HTTPS 域名放行但不算官方（会触发二次确认）", () => {
+    const c = checkBackendUrl("https://my-proxy.example.com/v1");
+    expect(c.ok).toBe(true);
+    expect(c.isOfficial).toBe(false);
+    expect(c.isLocal).toBe(false);
+  });
+
+  it("本机地址允许 HTTP", () => {
+    expect(checkBackendUrl("http://localhost:11434/v1").ok).toBe(true);
+    expect(checkBackendUrl("http://127.0.0.1:1234/v1").isLocal).toBe(true);
+  });
+
+  it("远端明文 HTTP 与非法地址一律拦下", () => {
+    expect(checkBackendUrl("http://evil.example.com/v1").ok).toBe(false);
+    expect(checkBackendUrl("not-a-url").ok).toBe(false);
+  });
+
+  it("chat 发送前拦下不安全地址，不发出请求", async () => {
+    fetchMock.mockReset();
+    const badProfile = { ...profile, baseURL: "http://evil.example.com/v1" };
+    await expect(chat(badProfile, [{ role: "user", content: "x" }])).rejects.toThrow(/不安全/);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });
 

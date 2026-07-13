@@ -1,7 +1,23 @@
 // API key 存 Windows 凭据管理器（keyring），settings.json 里只留空占位，避免明文落盘。
 const SECRET_SERVICE: &str = "life-sim";
 
+/// profile_id 是前端生成的固定格式（`p-<时间戳>-<随机>`）。这里做白名单校验，
+/// 拒绝异常长度或含特殊字符的标识符，避免被拿去探测/污染凭据库的其它条目。
+fn validate_profile_id(profile_id: &str) -> Result<(), String> {
+    if profile_id.len() < 3 || profile_id.len() > 64 {
+        return Err("非法的 profile_id：长度超出范围".into());
+    }
+    if !profile_id.starts_with("p-") {
+        return Err("非法的 profile_id：前缀不符".into());
+    }
+    if !profile_id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-') {
+        return Err("非法的 profile_id：含非法字符".into());
+    }
+    Ok(())
+}
+
 fn entry_for(profile_id: &str) -> Result<keyring::Entry, String> {
+    validate_profile_id(profile_id)?;
     keyring::Entry::new(SECRET_SERVICE, profile_id).map_err(|e| e.to_string())
 }
 
@@ -40,7 +56,6 @@ fn secret_delete(profile_id: String) -> Result<(), String> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_process::init())

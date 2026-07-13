@@ -1,7 +1,7 @@
 // 设置页：LLM profiles 编辑 + 连接测试 + 内容分级 + 叙事风格 + 检查更新。
 
 import { useState } from "react";
-import { testProfile } from "../llm/client";
+import { checkBackendUrl, testProfile } from "../llm/client";
 import { checkForUpdate } from "../updater";
 import { SwingDifficulty } from "../engine/resolver";
 import {
@@ -122,6 +122,29 @@ export function Settings() {
   };
 
   const save = async () => {
+    // 发送前确认：把密钥发往非官方、非本机的自定义域名时，明确告知用户目标地址
+    const custom = draft.profiles.filter((p) => {
+      if (!p.apiKey.trim()) return false;
+      const c = checkBackendUrl(p.baseURL);
+      return c.ok && !c.isOfficial && !c.isLocal;
+    });
+    if (custom.length > 0) {
+      const lines = custom.map((p) => `· ${p.name}：${checkBackendUrl(p.baseURL).host}`).join("\n");
+      const ok = window.confirm(
+        `以下后端配置了 API Key，保存后每次请求都会把密钥发送到这些自定义地址：\n\n${lines}\n\n` +
+        `请确认这些是你信任的服务商域名。确定继续保存吗？`,
+      );
+      if (!ok) return;
+    }
+    // 拦下协议不安全的地址（明文 HTTP 发往远端等），避免密钥泄露
+    const unsafe = draft.profiles.filter((p) => p.apiKey.trim() && !checkBackendUrl(p.baseURL).ok);
+    if (unsafe.length > 0) {
+      setTestResult((r) => ({
+        ...r,
+        ...Object.fromEntries(unsafe.map((p) => [p.id, `❌ 地址不安全：${checkBackendUrl(p.baseURL).reason}`])),
+      }));
+      return;
+    }
     await updateSettings(draft);
     setScreen(game ? "game" : "menu");
   };
