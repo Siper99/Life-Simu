@@ -268,6 +268,27 @@ export function resolveAction(
   };
 }
 
+/**
+ * 想花钱但付不起：这件事根本没能发生。不消耗精力、不扣钱、不转针，
+ * 只有落空的心情——现实感就是「427 块的学生买不起 3000 的手机」。
+ */
+export function unaffordableResolution(
+  rng: Rng,
+  state: GameState,
+  intent: ActionIntent,
+  price: number,
+): ActionResolution {
+  const deltas = emptyDeltas();
+  deltas.attrs.mood = -rng.int(1, 4);
+  const wallet = Math.max(0, state.character.money);
+  return {
+    intent,
+    tier: "fail",
+    deltas,
+    mechanical: `「${intent.summary}」→ 无力承担（需要约 ${price.toLocaleString()}，手头只有 ${wallet.toLocaleString()}）：这件事没能发生${describeDeltas(deltas)}`,
+  };
+}
+
 export function resolveEvent(
   rng: Rng,
   state: GameState,
@@ -365,6 +386,21 @@ const CATEGORY_KEYWORDS: [ActionCategory, AttrKey, RegExp][] = [
   ["leisure", "mood", /玩|游戏|娱乐|电影|听歌|放松|逛/],
 ];
 
+/** 离线购买估价：认出"买X"并给个粗略市价，引擎据此做买不买得起的现实校验 */
+const PRICE_HINTS: [RegExp, number][] = [
+  [/房|首付/, 300000],
+  [/车(?!票|站|间)/, 80000],
+  [/手机|电脑|笔记本|相机|平板/, 3000],
+  [/游戏机|自行车|吉他|手表/, 1500],
+  [/衣服|鞋|包|裙/, 300],
+];
+
+function fallbackMoneyCost(text: string): number | undefined {
+  if (!/买|购置|入手|换部新|换个新/.test(text)) return undefined;
+  const hit = PRICE_HINTS.find(([re]) => re.test(text));
+  return hit ? hit[1] : 200;
+}
+
 function fallbackTarget(text: string): string | undefined {
   const match = text.match(
     /(?:和|找|约|陪|认识|结识|追求|向)([\u4e00-\u9fff·]{2,6}?)(?=聊天|见面|吃饭|约会|表白|求婚|玩|$)/,
@@ -392,6 +428,7 @@ export function fallbackParseIntents(text: string): ActionIntent[] {
       attr,
       nsfw: false,
       target: category === "social" || category === "romance" ? fallbackTarget(p) : undefined,
+      moneyCost: fallbackMoneyCost(p),
     } satisfies ActionIntent;
   });
 }

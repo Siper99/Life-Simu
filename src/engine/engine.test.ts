@@ -900,6 +900,47 @@ describe("经济系统：钱和人脉都有花出去的窗口", () => {
   });
 });
 
+describe("自定义行动的金钱现实感", () => {
+  it("离线解析认得购买并按品类估价", () => {
+    expect(fallbackParseIntents("去买部新手机")[0].moneyCost).toBe(3000);
+    expect(fallbackParseIntents("攒钱买一套房")[0].moneyCost).toBe(300000);
+    expect(fallbackParseIntents("买点零食")[0].moneyCost).toBe(200);
+    expect(fallbackParseIntents("认真学习")[0].moneyCost).toBeUndefined();
+  });
+
+  it("买不起：行动被「无力承担」拦下——不扣钱、不转针，只有落空的心情", () => {
+    const { state } = newGameState(90);
+    state.world.year = state.character.birthYear + 15;
+    state.granularity = "season";
+    state.character.money = 427;
+    const intent = {
+      id: "a", summary: "去买部新手机", category: "leisure" as const, hours: 10,
+      risk: "high" as const, attr: "luck" as const, nsfw: false, moneyCost: 3000,
+    };
+    const pending = beginTurn(state, "去买部新手机", [intent]);
+    expect(pending.checks.filter((c) => c.actionId === "a")).toHaveLength(0); // 高危也不给转针
+    const before = state.character.money;
+    const outcome = finalizeTurn(state, pending);
+    expect(outcome.actions[0].mechanical).toContain("无力承担");
+    expect(outcome.actions[0].mechanical).toContain("3,000");
+    expect(outcome.actions[0].deltas.money).toBe(0);
+    expect((outcome.actions[0].deltas.attrs.mood ?? 0)).toBeLessThan(0);
+    expect(state.character.money).toBe(before); // 15 岁无生活开销，钱应分文未动
+  });
+
+  it("买得起：按真实标价扣钱，而不是类别公式的零星收支", () => {
+    const { state } = newGameState(91);
+    state.world.year = state.character.birthYear + 25;
+    state.character.money = 8000;
+    state.character.energy = 90;
+    const res = resolveAction(new Rng(2), state, {
+      id: "b", summary: "去买部新手机", category: "leisure", hours: 10,
+      risk: "low", attr: "luck", nsfw: false, moneyCost: 3000,
+    }, "success");
+    expect(res.deltas.money).toBe(-3000);
+  });
+});
+
 describe("场景模式：时间冻结的连续对手戏", () => {
   it("进入条件与拍数/精力预算", async () => {
     const { canEnterScene, beginScene, sceneBeatError, applySceneBeatCost, SCENE_MAX_BEATS, SCENE_BEAT_ENERGY } = await import("./scene");

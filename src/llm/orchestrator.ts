@@ -33,6 +33,7 @@ const VALID_RISK = new Set(["none","low","high"]);
 interface RawIntent {
   summary?: string; category?: string; hours?: number;
   risk?: string; attr?: string; nsfw?: boolean; target?: string; skill?: string;
+  moneyCost?: number;
 }
 
 /** 意图解析：LLM 优先，失败/未配置回退关键词解析 */
@@ -69,6 +70,8 @@ export async function parseIntents(
       nsfw: Boolean(r.nsfw),
       target: r.target ? String(r.target).slice(0, 20) : undefined,
       skill: r.skill ? String(r.skill).trim().slice(0, 6) : undefined,
+      // 真实标价照单全收（上限防溢出）；付不付得起由引擎在结算时把关，不在这里降价
+      moneyCost: Number(r.moneyCost) > 0 ? Math.min(10_000_000, Math.round(Number(r.moneyCost))) : undefined,
     }));
     return { intents, usedLlm: true };
   } catch (e) {

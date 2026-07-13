@@ -10,6 +10,7 @@ import {
   buildSwingCheck,
   resolveAction,
   resolveEvent,
+  unaffordableResolution,
 } from "./resolver";
 import {
   advancePlayerCareerYear,
@@ -66,6 +67,9 @@ export function beginTurn(
   }
 
   for (const intent of intents) {
+    // 付不起的花钱行动没有判定可言：结算时会被「无力承担」直接拦下，不给转针
+    const price = Math.max(0, Math.round(intent.moneyCost ?? 0));
+    if (price > Math.max(0, state.character.money)) continue;
     if (intent.risk === "high") {
       // 熟练度、生活方式（社交场）与人脉护航都直接抵扣判定难度
       const difficulty = clamp(
@@ -137,6 +141,14 @@ export function finalizeTurn(state: GameState, pending: PendingTurn): TurnOutcom
 
   const actions: ActionResolution[] = [];
   for (const intent of pending.intents) {
+    // 现实闸门：标价超过钱包的行动直接「无力承担」，钱和判定都不发生
+    const price = Math.max(0, Math.round(intent.moneyCost ?? 0));
+    if (price > Math.max(0, state.character.money)) {
+      const blocked = unaffordableResolution(rng, state, intent, price);
+      applyDeltas(state, blocked.deltas);
+      actions.push(blocked);
+      continue;
+    }
     const result = resultOf(intent.id);
     const tier =
       result?.tier ??
