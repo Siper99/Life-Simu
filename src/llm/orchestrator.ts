@@ -15,6 +15,7 @@ import {
   fallbackNarrative,
   fallbackSceneBeat,
   intentUserPrompt,
+  looksExplicit,
   narrativeSystem,
   narrativeUserPrompt,
   sceneSystem,
@@ -42,9 +43,12 @@ export async function parseIntents(
   state: GameState,
   playerText: string,
 ): Promise<{ intents: ActionIntent[]; usedLlm: boolean }> {
-  // 露骨模式下玩家原始输入可能含成人内容，解析也走 NSFW 后端，不经过官方 API
+  // 露骨模式下，只有玩家原文带露骨信号才把解析送去 NSFW 后端；
+  // 普通输入照常走主叙事后端——否则正常内容也会整批涌向 Grok
   const nsfwProfile =
-    settings.contentRating === "explicit" ? profileForRole(settings, "nsfw") : null;
+    settings.contentRating === "explicit" && looksExplicit(playerText)
+      ? profileForRole(settings, "nsfw")
+      : null;
   const profile = nsfwProfile ?? profileForRole(settings, "narrative");
   if (!profile) {
     return { intents: fallbackParseIntents(playerText), usedLlm: false };
@@ -91,9 +95,13 @@ export async function narrateTurn(
   playerText: string,
   outcome: TurnOutcome,
 ): Promise<{ text: string; hooks: string[]; usedLlm: boolean; nsfw: boolean }> {
-  const isNsfwTurn =
-    settings.contentRating === "explicit" &&
-    outcome.actions.some((a) => a.intent.nsfw);
+  // 双信号染色：LLM 的 nsfw 标记 + 文本露骨信号必须同时命中，
+  // 防止解析模型把普通恋爱行动乱标 nsfw、把正常叙事整回合送去 nsfw 后端
+  const flaggedNsfw = outcome.actions.some((a) => a.intent.nsfw);
+  const textSignal = looksExplicit(
+    `${playerText} ${outcome.actions.map((a) => a.intent.summary).join(" ")}`,
+  );
+  const isNsfwTurn = settings.contentRating === "explicit" && flaggedNsfw && textSignal;
   const nsfwProfile = profileForRole(settings, "nsfw");
   const profile = isNsfwTurn && nsfwProfile ? nsfwProfile : profileForRole(settings, "narrative");
   if (!profile) {

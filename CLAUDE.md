@@ -20,7 +20,7 @@ npx vitest run -t "运气豁免"   # 按名字跑单个测试
 ## 架构红线（改任何东西前先读）
 
 1. **引擎持数值真值，LLM 只产出文本与结构化意图**。所有 LLM 输出必须经引擎净化落地：`sanitizeLlmChoices`（行动卡）、`parseIntents` 的白名单校验（意图）、`splitNarrativeHooks`（叙事线头）——数值一律 clamp 到合法区间，解析失败静默降级到离线兜底。每个 LLM 功能都必须有无 LLM 兜底，游戏离线可完整运行。
-2. **NSFW 路由隔离**：露骨内容只发给明确标了 `nsfw` 角色的后端，`profileForRole` 对 nsfw 绝不回退到其他 profile（防止发给官方 API）。改 LLM 路由时不得破坏这条。**上下文同样隔离**：nsfw 后端生成的原文只留在游戏日志展示（`LogEntry.nsfw` 标记），记忆存 `NSFW_MEMORY_PLACEHOLDER` 替身、线头不采收、出卡提示词的「上回合叙事」换替身——保证后续发给常规后端的 prompt 不携带露骨原文（`llm.test.ts` 有断言）。
+2. **NSFW 路由隔离**：露骨内容只发给明确标了 `nsfw` 角色的后端，`profileForRole` 对 nsfw 绝不回退到其他 profile（防止发给官方 API）。改 LLM 路由时不得破坏这条。染色采用**双信号**（`looksExplicit` 文本信号 + LLM 的 intent.nsfw 标记同时命中才算 NSFW 回合；意图解析按输入文本信号选路），防止正常内容被误送 nsfw 后端。**上下文同样隔离**：nsfw 后端生成的原文只留在游戏日志展示（`LogEntry.nsfw` 标记），记忆存 `NSFW_MEMORY_PLACEHOLDER` 替身、线头不采收、出卡提示词的「上回合叙事」换替身——保证后续发给常规后端的 prompt 不携带露骨原文（`llm.test.ts` 有断言）。
 3. **确定性 RNG**：引擎内随机全部走 `Rng`（种子化，`rngState` 存在 GameState 里、每次消耗后写回）。UI 侧需要"同回合稳定"的随机（决策盘、建议）用 `seed ^ turn` 派生独立序列，不消耗主 RNG。
 4. **存档兼容**：给 `GameState` / `AppSettings` 加字段时，必须在 `store/persist.ts # migrateGame`（存档）或 `DEFAULT_SETTINGS` 合并（设置，`readSettingsFile` 已做展开合并）里补默认值，旧存档必须能继续玩。
 
