@@ -283,7 +283,8 @@ function advanceTime(rng: Rng, state: GameState): string[] {
     : age < 18 ? `高中${clamp(age - 14, 1, 3)}年级`
     : c.identity.schooling?.startsWith("大学") ? c.identity.schooling
     : null;
-  if (schooling !== c.identity.schooling && age < 18) {
+  // 18 岁后也要执行：中学学籍到期清除（否则"高中3年级"终身残留），大学学籍保留
+  if (schooling !== c.identity.schooling) {
     c.identity.schooling = schooling;
   }
 

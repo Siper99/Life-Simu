@@ -15,6 +15,11 @@ const CATEGORY_NAMES = {
   leisure: "休闲", adventure: "冒险", finance: "财富", health: "健康", other: "选择",
 } as const;
 
+const CATEGORY_EMOJI: Record<string, string> = {
+  study: "📚", work: "💼", social: "🤝", romance: "💞", exercise: "🏃",
+  leisure: "🎈", adventure: "🧭", finance: "💰", health: "🩺", other: "✨",
+};
+
 export function GameScreen() {
   const { game, phase, currentCheckIndex, submitTurn, submitChoices, judgeSwing, confirmSwing,
     doFastForward, setScreen, lastError, llmChoices, backing, setBacking, devOpen, toggleDev,
@@ -207,7 +212,9 @@ export function GameScreen() {
               className={`decision-card kind-${choice.kind}${selected ? " selected" : ""}${unaffordable ? " energy-unaffordable" : ""}`}
               disabled={busy} onClick={() => toggleChoice(choice.id)}>
               <div className="decision-card-top">
-                <span className="choice-category">{choice.categoryLabel}</span>
+                <span className="choice-category" data-cat={choice.intent.category}>
+                  {CATEGORY_EMOJI[choice.intent.category]} {choice.categoryLabel}
+                </span>
                 {choice.expiresIn && <span className="choice-expiry">仅剩 {choice.expiresIn} 回合</span>}
                 {choice.kind === "director" && <span className="choice-director">导演介入</span>}
                 {choice.kind === "context" && <span className="choice-context">🎯 此刻</span>}

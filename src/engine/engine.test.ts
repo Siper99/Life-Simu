@@ -384,7 +384,7 @@ describe("世界观：时代大事件与标题联动", () => {
     state.background.country = "中国";
     state.world.year = 1999; // 无大事年份
     state.character.money = 100;
-    expect(getDecisionBoard(state).headline).toContain("怎么过");
+    expect(getDecisionBoard(state).headline).toMatch(/[？。]$/); // 默认标题从轮换池里出
     state.character.money = -50;
     expect(getDecisionBoard(state).headline).toContain("欠着钱");
     state.world.year = 2020;
@@ -715,6 +715,54 @@ describe("情境卡与卡面个性化", () => {
     expect(hone).toBeDefined();
     expect(hone!.title).toContain("吉他");
     expect(hone!.intent.skill).toBe("吉他");
+  });
+
+  it("固定卡文案跨回合轮换：恢复卡不再一辈子一句话", async () => {
+    const { getDecisionBoard } = await import("./decisions");
+    const { state } = newGameState(80);
+    state.world.year = state.character.birthYear + 25;
+    const titles = new Set<string>();
+    for (let turn = 0; turn < 8; turn++) {
+      state.turn = turn;
+      const recovery = getDecisionBoard(state).choices.find((c) => c.kind === "recovery")!;
+      titles.add(recovery.title);
+    }
+    expect(titles.size).toBeGreaterThan(1);
+  });
+
+  it("关系卡在好感前三里轮换对象，不再永远盯着同一个人", async () => {
+    const { getDecisionBoard } = await import("./decisions");
+    const { state } = newGameState(81);
+    state.world.year = state.character.birthYear + 20;
+    const targets = new Set<string>();
+    for (let turn = 0; turn < 8; turn++) {
+      state.turn = turn;
+      const rel = getDecisionBoard(state).choices.find((c) => c.kind === "relationship")!;
+      if (rel.intent.target) targets.add(rel.intent.target);
+    }
+    expect(targets.size).toBeGreaterThan(1);
+  });
+
+  it("条件卡按处境进出卡池：无业才有求职卡", async () => {
+    const { getDecisionBoard } = await import("./decisions");
+    const collectDaily = (employed: boolean): Set<string> => {
+      const { state } = newGameState(82);
+      state.world.year = state.character.birthYear + 25;
+      state.character.identity.schooling = null;
+      state.character.identity.job = employed
+        ? { title: "程序员", employer: "x", weeklyHours: 40, weeklyPay: 1200, track: "技术", level: 1, xp: 0 }
+        : null;
+      const ids = new Set<string>();
+      for (let turn = 0; turn < 24; turn++) {
+        state.turn = turn;
+        for (const c of getDecisionBoard(state).choices) {
+          if (c.kind === "daily") ids.add(c.id);
+        }
+      }
+      return ids;
+    };
+    expect(collectDaily(false).has("daily-jobhunt")).toBe(true);
+    expect(collectDaily(true).has("daily-jobhunt")).toBe(false);
   });
 
   it("模糊的「才艺」占位被替换为角色专属特长，同一角色稳定", async () => {

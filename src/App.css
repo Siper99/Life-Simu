@@ -731,6 +731,17 @@ button {
 .intensity-high { color: #e0b96e; }
 .decision-card-top { display: flex; align-items: center; gap: 6px; min-height: 18px; margin-bottom: 4px; }
 .choice-category, .choice-expiry, .choice-director { padding: 1px 7px; border-radius: 999px; font-size: 9.5px; font-weight: 700; background: #303543; color: #b8becc; }
+/* 类别配色：十种行动一眼可辨 */
+.choice-category[data-cat="study"] { color: #93b8f2; background: rgba(93, 141, 224, 0.16); }
+.choice-category[data-cat="work"] { color: #e5c07b; background: rgba(190, 145, 60, 0.16); }
+.choice-category[data-cat="social"] { color: #9fd8b4; background: rgba(84, 176, 122, 0.14); }
+.choice-category[data-cat="romance"] { color: #f0a3c8; background: rgba(224, 93, 186, 0.14); }
+.choice-category[data-cat="exercise"] { color: #f2b08d; background: rgba(224, 154, 93, 0.16); }
+.choice-category[data-cat="leisure"] { color: #8fd7e8; background: rgba(93, 201, 224, 0.14); }
+.choice-category[data-cat="adventure"] { color: #c9a8f0; background: rgba(154, 93, 224, 0.16); }
+.choice-category[data-cat="finance"] { color: #ecd193; background: rgba(160, 124, 33, 0.18); }
+.choice-category[data-cat="health"] { color: #f0a19a; background: rgba(224, 93, 93, 0.14); }
+.choice-category[data-cat="other"] { color: #c3c9d6; background: rgba(255, 255, 255, 0.07); }
 .choice-expiry { color: #d8b5ef; background: rgba(126, 76, 161, 0.24); }
 .choice-director { color: #efaaa3; background: rgba(160, 63, 53, 0.18); }
 .choice-llm { padding: 1px 7px; border-radius: 999px; font-size: 9.5px; font-weight: 700; color: #ecd193; background: rgba(160, 124, 33, 0.22); }
